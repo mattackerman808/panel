@@ -4,6 +4,7 @@ import type {
   HealthSubsystem,
   NetworkDevice,
   UdmInfo,
+  UpsInfo,
   Wan,
 } from './types.js';
 
@@ -398,4 +399,38 @@ export function mockDevices(): NetworkDevice[] {
     uplink: null,
   };
   return [udm, ...aps, ...sws];
+}
+
+/** Synthetic UPS telemetry so the power page is exercisable without a real
+ *  UPS. Models a ~900 VA unit on mains at a steady load, with slow noise on
+ *  load/voltage and a full battery. Roughly what an APC SMT-class unit
+ *  reports over RFC 1628. */
+export function mockUps(): UpsInfo {
+  const t = Date.now() / 1000;
+  const slow = (period: number, amp: number, ph = 0) => Math.sin((t / period) * Math.PI * 2 + ph) * amp;
+  const loadPct = Math.max(4, Math.min(95, 34 + slow(90, 6) + slow(17, 2)));
+  const outputVoltage = 120 + slow(23, 1.4);
+  const ratedW = 1500;
+  const outputPowerW = Math.round((loadPct / 100) * ratedW);
+  const outputCurrentA = outputPowerW / outputVoltage;
+  return {
+    reachable: true,
+    manufacturer: 'CyberPower',
+    model: 'PR1500RTXL2UC',
+    batteryStatus: 'normal',
+    onBattery: false,
+    secondsOnBattery: 0,
+    minutesRemaining: Math.round(41 - loadPct * 0.25),
+    chargePct: 100,
+    batteryVoltage: 56.8 + slow(60, 0.2),
+    batteryTempC: 26 + slow(300, 1.2),
+    inputVoltage: Math.round(120 + slow(19, 1.8)),
+    inputFrequencyHz: 60 + slow(40, 0.03),
+    outputSource: 'normal',
+    outputVoltage: Math.round(outputVoltage),
+    outputFrequencyHz: 60 + slow(40, 0.03),
+    outputCurrentA: Math.round(outputCurrentA * 10) / 10,
+    outputPowerW,
+    loadPct: Math.round(loadPct),
+  };
 }

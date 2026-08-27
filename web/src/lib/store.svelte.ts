@@ -6,6 +6,7 @@ import type {
   Snapshot,
   Tick,
   UdmInfo,
+  UpsInfo,
   Wan,
   WanSample,
   WsMessage,
@@ -27,7 +28,8 @@ class PanelStore {
   udm = $state<UdmInfo | null>(null);
   devices = $state<NetworkDevice[]>([]);
   health = $state<HealthSubsystem[]>([]);
-  features = $state({ dpiAvailable: false, perClientRates: false, snmpAvailable: false });
+  ups = $state<UpsInfo | null>(null);
+  features = $state({ dpiAvailable: false, perClientRates: false, snmpAvailable: false, upsAvailable: false });
   lastTickAt = $state(0);
 
   applySnapshot(s: Snapshot): void {
@@ -43,6 +45,7 @@ class PanelStore {
     this.udm = s.udm;
     this.devices = s.devices;
     this.health = s.health;
+    this.ups = s.ups;
     this.features = s.features;
     this.lastTickAt = s.ts;
   }
@@ -55,6 +58,7 @@ class PanelStore {
     if (t.udm) this.udm = t.udm;
     if (t.devices) this.devices = t.devices;
     if (t.health) this.health = t.health;
+    if (t.ups) this.ups = t.ups;
     const next = { ...this.histories };
     for (const s of t.samples) {
       const cur = next[s.id] ?? [];

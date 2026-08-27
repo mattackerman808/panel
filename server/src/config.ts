@@ -52,6 +52,16 @@ export const config = {
     site: process.env.UDM_SITE ?? 'default',
     insecureTls: bool(process.env.UDM_INSECURE_TLS, true),
   },
+  // UPS power monitoring over SNMP (vendor-neutral RFC 1628 UPS-MIB, with
+  // an APC PowerNet fallback). Disabled unless UPS_HOST is set. Runs
+  // independently of the UDM subsystems — a UPS on a different subnet is
+  // fine as long as the server can route to it.
+  ups: {
+    enabled: !!process.env.UPS_HOST,
+    host: process.env.UPS_HOST ?? '',
+    community: process.env.UPS_SNMP_COMMUNITY ?? 'public',
+    port: num(process.env.UPS_SNMP_PORT, 161),
+  },
   snmp: {
     community: process.env.UDM_SNMP_COMMUNITY ?? 'public',
     port: num(process.env.UDM_SNMP_PORT, 161),
@@ -72,6 +82,10 @@ export const config = {
     clientsMs: num(process.env.PANEL_POLL_CLIENTS_MS, 60000),
     dpiMs: num(process.env.PANEL_POLL_DPI_MS, 60000),
     udmInfoMs: num(process.env.PANEL_POLL_UDM_MS, 15000),
+    // UPS SNMP is cheap and the interesting events (load spikes, transfer
+    // to battery) are fast, so poll at 5s. The UPS agent is on a separate
+    // host from the UDM, so this cadence is independent of the WAN tick.
+    upsMs: num(process.env.PANEL_POLL_UPS_MS, 5000),
     // How often to re-attempt a subsystem that came up dead. The Pi can
     // start panel.service before eth0 has an address, which used to leave
     // the poller WAN-less (and every chart blank) until a manual restart.

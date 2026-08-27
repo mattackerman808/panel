@@ -85,6 +85,27 @@ export type UdmInfo = {
   tempC: number | null;
 };
 
+export type UpsInfo = {
+  reachable: boolean;
+  manufacturer: string | null;
+  model: string | null;
+  batteryStatus: 'normal' | 'low' | 'depleted' | 'unknown';
+  onBattery: boolean;
+  secondsOnBattery: number | null;
+  minutesRemaining: number | null;
+  chargePct: number | null;
+  batteryVoltage: number | null;
+  batteryTempC: number | null;
+  inputVoltage: number | null;
+  inputFrequencyHz: number | null;
+  outputSource: 'normal' | 'battery' | 'bypass' | 'booster' | 'reducer' | 'none' | 'other' | 'unknown';
+  outputVoltage: number | null;
+  outputFrequencyHz: number | null;
+  outputCurrentA: number | null;
+  outputPowerW: number | null;
+  loadPct: number | null;
+};
+
 export type PortNeighbor = {
   chassisId: string;
   portId: string | null;
@@ -149,7 +170,8 @@ export type Snapshot = {
   udm: UdmInfo | null;
   devices: NetworkDevice[];
   health: HealthSubsystem[];
-  features: { dpiAvailable: boolean; perClientRates: boolean; snmpAvailable: boolean };
+  ups: UpsInfo | null;
+  features: { dpiAvailable: boolean; perClientRates: boolean; snmpAvailable: boolean; upsAvailable: boolean };
 };
 
 export type Tick = {
@@ -162,6 +184,7 @@ export type Tick = {
   udm?: UdmInfo;
   devices?: NetworkDevice[];
   health?: HealthSubsystem[];
+  ups?: UpsInfo;
 };
 
 export type WsMessage =

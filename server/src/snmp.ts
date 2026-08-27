@@ -64,6 +64,11 @@ export type SnmpOpts = {
   host: string;
   community: string;
   port: number;
+  /** Per-request timeout in ms. Default 2500. Bump it for slow embedded
+   *  agents (some UPS network cards take seconds to answer). */
+  timeoutMs?: number;
+  /** net-snmp retries per request (total attempts = retries + 1). Default 1. */
+  retries?: number;
 };
 
 export class SnmpClient {
@@ -73,8 +78,8 @@ export class SnmpClient {
     this.session = snmp.createSession(opts.host, opts.community, {
       port: opts.port,
       version: snmp.Version2c,
-      retries: 1,
-      timeout: 2500,
+      retries: opts.retries ?? 1,
+      timeout: opts.timeoutMs ?? 2500,
       transport: 'udp4',
     });
   }
@@ -167,6 +172,59 @@ export class SnmpClient {
         txOctets: outVb ? counter64ToNumber(outVb.value) : 0,
       });
     }
+    return out;
+  }
+
+  /** GET a set of scalar OIDs, returning a map of oid → value. Varbind-level
+   *  errors (noSuchObject/noSuchInstance, which SNMPv2c reports per-OID
+   *  rather than failing the whole request) are omitted from the map, so
+   *  callers can request a superset of OIDs across vendor MIBs and simply
+   *  read back whatever the agent implements.
+   *
+   *  The request is split into chunks of `chunkSize` and issued
+   *  sequentially: small embedded agents (UPS network cards especially) drop
+   *  or time out on large multi-varbind PDUs, and dislike concurrent
+   *  requests. A chunk that fails is skipped rather than failing the whole
+   *  read — a partial map is more useful than none. */
+  async getValues(oids: string[], chunkSize = 8, tries = 2): Promise<Map<string, unknown>> {
+    const out = new Map<string, unknown>();
+    if (oids.length === 0) return out;
+    let anyOk = false;
+    let lastErr: unknown = null;
+
+    // Fetch one batch, retrying on failure. If it still fails and holds more
+    // than one OID, split it and recurse — this both isolates a single OID
+    // the agent rejects (some UPS cards answer an unsupported OID with a
+    // whole-PDU `noSuchName` error instead of a per-varbind exception, which
+    // would otherwise poison every OID batched with it) and halves the PDU
+    // for agents that choke on size. A single OID that still fails is
+    // dropped, leaving a partial map rather than failing the whole read.
+    const fetchInto = async (batch: string[]): Promise<void> => {
+      for (let attempt = 0; attempt < tries; attempt++) {
+        try {
+          const vbs = await this.get(batch);
+          anyOk = true;
+          for (const vb of vbs) {
+            if (vb.value !== undefined && vb.value !== null) out.set(vb.oid, vb.value);
+          }
+          return;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      if (batch.length > 1) {
+        const mid = batch.length >> 1;
+        await fetchInto(batch.slice(0, mid));
+        await fetchInto(batch.slice(mid));
+      }
+    };
+
+    for (let i = 0; i < oids.length; i += chunkSize) {
+      await fetchInto(oids.slice(i, i + chunkSize));
+    }
+    // Only surface an error if *every* batch failed — that's a genuinely
+    // unreachable agent, versus a card that just rejected some OIDs.
+    if (!anyOk && lastErr) throw lastErr;
     return out;
   }
 
