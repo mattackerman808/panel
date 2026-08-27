@@ -1,8 +1,6 @@
 <script lang="ts">
-  // Slim always-visible legend of the kiosk's interactive controls, shown
-  // directly under the header. Break-out is the KDE-level Ctrl+Alt+K shortcut
-  // (see deploy/kiosk-toggle.sh / the KWin "Show Desktop" binding); the rest
-  // are handled in +page.svelte and theme.svelte.ts.
+  // Slim always-visible legend of the interactive controls, shown directly
+  // under the header. All handled in +page.svelte and theme.svelte.ts.
   let { paused = false }: { paused?: boolean } = $props();
 </script>
 
@@ -12,8 +10,6 @@
   <span class="hk"><span class="lbl">FWD</span><kbd>→</kbd></span>
   <span class="sep">·</span>
   <span class="hk"><kbd>T</kbd><span class="lbl">THEME</span></span>
-  <span class="sep">·</span>
-  <span class="hk"><kbd>CTRL</kbd><kbd>ALT</kbd><kbd>K</kbd><span class="lbl">DESKTOP</span></span>
 
   {#if paused}
     <span class="status">❚❚ PAUSED</span>
