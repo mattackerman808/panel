@@ -1,15 +1,18 @@
-export const THEMES = ['xbox', 'hud'] as const;
+export const THEMES = ['hud', 'arctic', 'outrun', 'ember', 'nebula'] as const;
 export type ThemeName = (typeof THEMES)[number];
 
 export const THEME_LABELS: Record<ThemeName, string> = {
-  xbox: 'XBOX',
   hud: 'HUD',
+  arctic: 'ARCTIC',
+  outrun: 'OUTRUN',
+  ember: 'EMBER',
+  nebula: 'NEBULA',
 };
 
-// Bumped from 'panel.theme' so the new xbox default takes effect on
-// kiosks that already have a stored preference from the prior theme.
-const STORAGE_KEY = 'panel.theme.v2';
-const DEFAULT_THEME: ThemeName = 'xbox';
+// Bumped from v2 so kiosks/browsers holding the retired 'xbox' preference
+// fall back to the new HUD default instead of a theme that no longer exists.
+const STORAGE_KEY = 'panel.theme.v3';
+const DEFAULT_THEME: ThemeName = 'hud';
 
 function isTheme(v: string | null | undefined): v is ThemeName {
   return !!v && (THEMES as readonly string[]).includes(v);

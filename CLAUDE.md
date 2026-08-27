@@ -56,7 +56,7 @@ The UDM Pro Max exposes two APIs and the poller uses both deliberately:
 ## Frontend specifics
 
 - **Svelte 5 runes** — state classes use `$state(...)` (see `store.svelte.ts`, `theme.svelte.ts`). Don't reach for stores from `svelte/store`.
-- **Themes** — two themes (`xbox`, `hud`) live in CSS custom properties under `[data-theme="..."]` (see `app.css`). `theme.svelte.ts` swaps `documentElement.dataset.theme`. Keyboard: `t`/`T` cycles, `1-9` jumps. New themes go in `THEMES`, `THEME_LABELS`, and the CSS.
+- **Themes** — five themes (`hud` default, `arctic`, `outrun`, `ember`, `nebula`) live in CSS custom properties under `[data-theme="..."]` (see `app.css`). All share one token contract, so components need no per-theme code. `theme.svelte.ts` swaps `documentElement.dataset.theme`. Keyboard: `t`/`T` cycles, `1-9` jumps. New themes go in `THEMES`, `THEME_LABELS`, and the CSS. Keep every theme cheap to render — the burn-in guard cycles through them (a prior `xbox` theme carried an animated background that was dropped along with the theme).
 - **Page cycling** — `+page.svelte` auto-cycles 6 pages every 30s (Network, Clients, Layer 2, Switch Detail, Topology, Power/UPS). Keys: `←`/`→` step, `Space`/`P` pause the auto-cycle. `HotkeyBar.svelte` renders the always-visible legend under the header (incl. the Ctrl+Alt+K desktop break-out).
 - **Burn-in guard** (`web/src/lib/burnInGuard.ts`) — periodically translates `.panel-root` by a few pixels and cycles the theme so static bright UI doesn't burn into the kiosk LCD. All themes must have similar animation cost; a previous "matrix" theme was dropped because it was too expensive during the cycle.
 - The page is one route (`+page.svelte`) — this is a single-screen kiosk dashboard, not a multi-page app.
