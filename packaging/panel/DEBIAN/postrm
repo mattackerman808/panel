@@ -1,0 +1,21 @@
+#!/bin/sh
+# panel postrm — on purge, remove config, state, and the service user.
+# A plain "remove" leaves /etc/panel and /var/lib/panel intact.
+set -e
+
+case "$1" in
+  purge)
+    rm -f /etc/panel/panel.env
+    rmdir /etc/panel 2>/dev/null || true
+    rm -rf /var/lib/panel
+    if getent passwd panel >/dev/null; then
+      deluser --system --quiet panel || true
+    fi
+    ;;
+esac
+
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload 2>/dev/null || true
+fi
+
+exit 0

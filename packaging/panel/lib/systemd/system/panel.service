@@ -1,0 +1,29 @@
+[Unit]
+Description=panel - network monitoring dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=panel
+Group=panel
+# App payload lives under /opt/panel (server/dist, web/build, node_modules).
+# cwd is the writable state dir — the server persists monthly WAN counters
+# to ./data/monthly.json relative to it.
+WorkingDirectory=/var/lib/panel
+EnvironmentFile=/etc/panel/panel.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/panel/server/dist/index.js
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the service only needs to read its payload and write its state
+# dir, plus reach the network (UDM + UPS SNMP/API).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/panel
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

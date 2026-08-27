@@ -1,0 +1,14 @@
+#!/bin/sh
+# panel prerm — stop + disable the unit before the files are removed.
+set -e
+
+case "$1" in
+  remove|deconfigure)
+    if [ -d /run/systemd/system ]; then
+      systemctl stop panel.service || true
+      systemctl disable panel.service || true
+    fi
+    ;;
+esac
+
+exit 0

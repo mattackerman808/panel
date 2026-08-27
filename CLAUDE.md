@@ -49,13 +49,32 @@ The UDM Pro Max exposes two APIs and the poller uses both deliberately:
 
 `store.features` advertises which subsystems are live so the UI can degrade gracefully.
 
+## UPS power monitoring
+
+`server/src/ups.ts` polls an optional network-managed UPS over SNMP (independent of the UDM — the UPS can be on a different subnet). It reads the vendor-neutral **UPS-MIB (RFC 1628)** and falls back to the **APC PowerNet MIB** per-field, so a partial-MIB UPS still yields whatever it implements. The whole read is one SNMP GET (SNMPv2c reports missing OIDs per-varbind, so requesting the union of both MIBs is safe). Enabled only when `UPS_HOST` is set; `store.features.upsAvailable` reflects that so the Power page can show "not configured" vs. "unreachable". Poll cadence is `PANEL_POLL_UPS_MS` (default 5s), on its own timer inside the tick. Reuses the generic `SnmpClient` from `snmp.ts` (`getValues()`), pointed at the UPS host. The normalized wire type is `UpsInfo` (in both `types.ts` files).
+
 ## Frontend specifics
 
 - **Svelte 5 runes** — state classes use `$state(...)` (see `store.svelte.ts`, `theme.svelte.ts`). Don't reach for stores from `svelte/store`.
 - **Themes** — two themes (`xbox`, `hud`) live in CSS custom properties under `[data-theme="..."]` (see `app.css`). `theme.svelte.ts` swaps `documentElement.dataset.theme`. Keyboard: `t`/`T` cycles, `1-9` jumps. New themes go in `THEMES`, `THEME_LABELS`, and the CSS.
-- **Page cycling** — `+page.svelte` auto-cycles 5 pages every 30s. Keys: `←`/`→` step, `Space`/`P` pause the auto-cycle. `HotkeyBar.svelte` renders the always-visible legend under the header (incl. the Ctrl+Alt+K desktop break-out).
+- **Page cycling** — `+page.svelte` auto-cycles 6 pages every 30s (Network, Clients, Layer 2, Switch Detail, Topology, Power/UPS). Keys: `←`/`→` step, `Space`/`P` pause the auto-cycle. `HotkeyBar.svelte` renders the always-visible legend under the header (incl. the Ctrl+Alt+K desktop break-out).
 - **Burn-in guard** (`web/src/lib/burnInGuard.ts`) — periodically translates `.panel-root` by a few pixels and cycles the theme so static bright UI doesn't burn into the kiosk LCD. All themes must have similar animation cost; a previous "matrix" theme was dropped because it was too expensive during the cycle.
 - The page is one route (`+page.svelte`) — this is a single-screen kiosk dashboard, not a multi-page app.
+
+## Packaging (Debian / apt — Salt-driven installs)
+
+The app ships as a Debian package `panel`, built and published the same way as the `salt-808` package in `~/git/salt` (that repo is the reference for the house convention).
+
+- `make deb [VERSION=…]` builds `build/panel_<version>_all.deb`: `npm ci && npm run build`, then stages the app under `/opt/panel` (`server/dist`, `web/build`, and a **standalone prod-only `node_modules`** installed from `server/package.json` — the web build-time deps like fonts/d3/elk are excluded, keeping the deb ~3 MB and `Architecture: all` since every runtime dep is pure JS/wasm).
+- `make publish` uploads it via `curl -H "Authorization: Bearer $REPO_API_KEY"` to `$REPO_URL` (default `http://apt.808.org/upload`).
+- CI: `.github/workflows/publish.yml` builds + publishes on push to `main` (date-stamped version `YY.M.D.<run>`), mirroring salt-808. Runs on `ubuntu-latest` (salt-808 reaches apt.808.org from there); swap `runs-on` for a self-hosted runner label if preferred. Needs the `REPO_API_KEY` repo secret.
+- Package layout: app at `/opt/panel`, unit `/lib/systemd/system/panel.service` (runs as the `panel` system user, `WorkingDirectory=/var/lib/panel`, `EnvironmentFile=/etc/panel/panel.env`), state in `/var/lib/panel/data`. `postinst` creates the user/dirs and installs `/etc/panel/panel.env` from `/usr/share/panel/panel.env.example` **only if absent**, so Salt can own that file without upgrade clobber. Static packaging tree is `packaging/panel/`; the version placeholder in `DEBIAN/control` is `{{VERSION}}`.
+
+Salt then consumes it (wired in `~/git/salt`, not here): `pkgrepo.managed` for apt.808.org + `pkg.installed: panel` + `file.managed: /etc/panel/panel.env` from pillar + `service.running: panel`.
+
+## Deployment (VM / web app)
+
+`deploy/install-vm.sh` installs the server as a plain web service (no kiosk display): builds, writes `panel-vm.service` (binds `127.0.0.1:4000`, `ProtectSystem=strict` with `data/` writable), enables it, and prints reverse-proxy next steps. Put a reverse proxy in front for TLS + a hostname — configs in `deploy/reverse-proxy/`: `Caddyfile` (auto-TLS, transparent WebSockets — the easy path) and `apache-panel.conf` (needs `mod_proxy_wstunnel`; `/ws` must be `ProxyPass`ed as `ws://` **before** the `/` catch-all). The VM must be able to route to the UDM (SNMP + legacy API) and the UPS (SNMP), or the poller degrades. Containerizing for the Kube cluster is the intended later step; this VM path is the interim host.
 
 ## Deployment (Pi kiosk)
 

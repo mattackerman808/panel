@@ -1,0 +1,12 @@
+Package: panel
+Version: {{VERSION}}
+Architecture: all
+Maintainer: Matthew Ackerman
+Section: net
+Priority: optional
+Depends: nodejs (>= 18), adduser
+Description: Network monitoring dashboard for the 808.org UDM + UPS
+ Fastify + SvelteKit dashboard that polls the UniFi UDM Pro Max (SNMP +
+ controller API) and a CyberPower UPS (SNMP) and serves a live web UI.
+ Runs as panel.service on 127.0.0.1:4000, behind a reverse proxy.
+ Configure via /etc/panel/panel.env (Salt-managed on real hosts).

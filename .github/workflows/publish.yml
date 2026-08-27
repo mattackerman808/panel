@@ -1,0 +1,42 @@
+name: Build and publish panel deb
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  publish:
+    # salt-808 publishes to apt.808.org from ubuntu-latest, so the cloud
+    # runner can reach the repo. Switch this to your self-hosted runner
+    # label (e.g. [self-hosted, linux]) if you'd rather build on-fleet.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # github.run_number is preserved when a run is RE-run, but the deb is
+      # rebuilt, so a re-run would otherwise produce the same version with
+      # different bytes — which the apt repo rejects on publish. run_attempt
+      # increments on each re-run, so appending it past the first attempt
+      # gives a strictly-newer version that publishes cleanly. (Same guard
+      # as the salt-808 workflow.)
+      - name: Set version
+        id: version
+        run: |
+          attempt=""
+          if [ "${{ github.run_attempt }}" -gt 1 ]; then
+            attempt=".${{ github.run_attempt }}"
+          fi
+          echo "ver=$(date -u +%-y.%-m.%-d).${{ github.run_number }}${attempt}" >> "$GITHUB_OUTPUT"
+
+      - name: Build package
+        run: make deb VERSION=${{ steps.version.outputs.ver }}
+
+      - name: Publish panel
+        run: |
+          curl -f -H "Authorization: Bearer ${{ secrets.REPO_API_KEY }}" \
+            --upload-file build/panel_${{ steps.version.outputs.ver }}_all.deb \
+            http://apt.808.org/upload/panel_${{ steps.version.outputs.ver }}_all.deb

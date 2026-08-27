@@ -1,0 +1,38 @@
+#!/bin/sh
+# panel postinst — create the service user, lay down runtime dirs and the
+# default config, then enable + (re)start the unit. Idempotent: safe on
+# both fresh install and upgrade.
+set -e
+
+case "$1" in
+  configure)
+    # System user the service runs as. --no-create-home: /var/lib/panel is
+    # created and chowned below, not by adduser.
+    if ! getent passwd panel >/dev/null; then
+      adduser --system --group --home /var/lib/panel --no-create-home \
+        --disabled-login --quiet panel
+    fi
+
+    # Runtime state (monthly WAN counters land in data/).
+    mkdir -p /var/lib/panel/data
+    chown -R panel:panel /var/lib/panel
+
+    # Config: install the shipped default only if none exists, so package
+    # upgrades never clobber a Salt-managed /etc/panel/panel.env.
+    if [ ! -e /etc/panel/panel.env ]; then
+      mkdir -p /etc/panel
+      cp /usr/share/panel/panel.env.example /etc/panel/panel.env
+      chown root:panel /etc/panel/panel.env
+      chmod 640 /etc/panel/panel.env
+    fi
+
+    # Enable + start via systemd when it's running (no-op in a chroot/build).
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload || true
+      systemctl enable panel.service || true
+      systemctl restart panel.service || true
+    fi
+    ;;
+esac
+
+exit 0
