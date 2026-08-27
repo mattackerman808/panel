@@ -68,51 +68,47 @@
 }
 
 /* ============================================================
-   Xbox theme: tribute to the original Xbox dashboard.
-   Pure-black background, signature Xbox green primary, acid-lime
-   accent, pronounced bloom/glow on values, condensed display
-   font for the techy menu vibe.
+   Arctic: icy command console — bright cyan/teal on deep slate,
+   crisp and low-glow.
    ============================================================ */
 
-[data-theme='xbox'] {
-  --c-bg: #000000;
-  --c-bg-panel: #06140a;
-  --c-bg-panel-2: #0a1f10;
-  --c-bg-overlay: rgba(0, 0, 0, 0.75);
+[data-theme='arctic'] {
+  --c-bg: #071013;
+  --c-bg-panel: #0d1a1f;
+  --c-bg-panel-2: #12242b;
+  --c-bg-overlay: rgba(7, 16, 19, 0.72);
 
-  --c-line: #143015;
-  --c-line-bright: #28552c;
+  --c-line: #143038;
+  --c-line-bright: #1f4a56;
 
-  --c-primary: #9bca28;
-  --c-secondary: #c8e44a;
-  --c-ok: #9bca28;
-  --c-warn: #ffb000;
-  --c-err: #ff3030;
+  --c-primary: #35e0d4;
+  --c-secondary: #8fc7ff;
+  --c-ok: #52e0a0;
+  --c-warn: #ffcf5c;
+  --c-err: #ff6b7a;
 
-  --c-text-bright: #eef7e0;
-  --c-text: #d2e3ac;
-  --c-text-dim: #93b171;
+  --c-text-bright: #e6f7fb;
+  --c-text: #9fbdc7;
+  --c-text-dim: #5f8593;
 
-  --dpi-1: #9bca28;
-  --dpi-2: #c8e44a;
-  --dpi-3: #5fa61a;
-  --dpi-4: #ffb000;
-  --dpi-5: #ff3030;
-  --dpi-6: #d8ec78;
-  --dpi-7: #84b020;
-  --dpi-8: #b8d83a;
+  --dpi-1: #35e0d4;
+  --dpi-2: #8fc7ff;
+  --dpi-3: #52e0a0;
+  --dpi-4: #b98cff;
+  --dpi-5: #ff6b7a;
+  --dpi-6: #5cc8ff;
+  --dpi-7: #2fb8b0;
+  --dpi-8: #7de0c0;
 
-  --font-display: 'Saira Condensed', 'Inter Variable', system-ui, sans-serif;
+  --font-display: 'Inter Variable', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
 
-  --frame-corner: 14px;
+  --frame-corner: 12px;
   --frame-border-blend: linear-gradient(135deg, var(--c-primary) 0%, var(--c-line-bright) 30%, var(--c-line-bright) 70%, var(--c-secondary) 100%);
-  /* Green bloom — the OG dashboard signature, dialed back so value
-     text stays sharp and legible on the kiosk. */
-  --glow-mult: 0.4;
+  --glow-mult: 0.25;
 
-  --bg-radial-1: radial-gradient(ellipse at center, color-mix(in oklab, var(--c-primary) 8%, transparent), transparent 55%);
-  --bg-radial-2: radial-gradient(ellipse at bottom, color-mix(in oklab, var(--c-primary) 4%, transparent), transparent 70%);
+  --bg-radial-1: radial-gradient(ellipse at top, color-mix(in oklab, var(--c-primary) 6%, transparent), transparent 60%);
+  --bg-radial-2: radial-gradient(ellipse at bottom right, color-mix(in oklab, var(--c-secondary) 4%, transparent), transparent 60%);
 
   --noise-opacity: 0;
   --scanline-opacity: 0;
@@ -120,116 +116,150 @@
 }
 
 /* ============================================================
-   Xbox-theme background animation: a slow central glow that
-   "breathes," plus three concentric green rings continuously
-   expanding outward from center. CSS-only and GPU-accelerated
-   (transform/opacity), so the Pi handles it fine. Hidden on
-   non-Xbox themes.
+   Outrun: synthwave night drive — hot magenta + cyan on deep
+   indigo, pronounced bloom and faint scanlines. Condensed
+   display face for the retro-techy vibe.
    ============================================================ */
 
-.xbox-bg {
-  display: none;
+[data-theme='outrun'] {
+  --c-bg: #0c0716;
+  --c-bg-panel: #150a26;
+  --c-bg-panel-2: #1e0f38;
+  --c-bg-overlay: rgba(12, 7, 22, 0.75);
+
+  --c-line: #2a1550;
+  --c-line-bright: #43217a;
+
+  --c-primary: #ff4d9d;
+  --c-secondary: #45e0ff;
+  --c-ok: #57e08f;
+  --c-warn: #ffcc4d;
+  --c-err: #ff5470;
+
+  --c-text-bright: #f7e9ff;
+  --c-text: #c3a8d8;
+  --c-text-dim: #8a6fa8;
+
+  --dpi-1: #ff4d9d;
+  --dpi-2: #45e0ff;
+  --dpi-3: #b46bff;
+  --dpi-4: #57e08f;
+  --dpi-5: #ffcc4d;
+  --dpi-6: #ff7ac0;
+  --dpi-7: #6a8bff;
+  --dpi-8: #ff5470;
+
+  --font-display: 'Saira Condensed', 'Inter Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+
+  --frame-corner: 14px;
+  --frame-border-blend: linear-gradient(135deg, var(--c-primary) 0%, var(--c-line-bright) 30%, var(--c-line-bright) 70%, var(--c-secondary) 100%);
+  --glow-mult: 0.55;
+
+  --bg-radial-1: radial-gradient(ellipse at top, color-mix(in oklab, var(--c-primary) 9%, transparent), transparent 58%);
+  --bg-radial-2: radial-gradient(ellipse at bottom, color-mix(in oklab, var(--c-secondary) 6%, transparent), transparent 62%);
+
+  --noise-opacity: 0;
+  --scanline-opacity: 0.05;
+  --scanline-step: 3px;
 }
 
-[data-theme='xbox'] .xbox-bg {
-  display: block;
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  overflow: hidden;
+/* ============================================================
+   Ember: graphite + ember orange — a warm, modern ops console.
+   Neutral steel panels, flatter corners, restrained glow.
+   ============================================================ */
+
+[data-theme='ember'] {
+  --c-bg: #0c0e11;
+  --c-bg-panel: #15181d;
+  --c-bg-panel-2: #1c2027;
+  --c-bg-overlay: rgba(12, 14, 17, 0.75);
+
+  --c-line: #262b33;
+  --c-line-bright: #38414d;
+
+  --c-primary: #ff7a45;
+  --c-secondary: #ffd166;
+  --c-ok: #5ad19a;
+  --c-warn: #ffb84d;
+  --c-err: #ff5c5c;
+
+  --c-text-bright: #eef1f5;
+  --c-text: #a7b0bd;
+  --c-text-dim: #6b7686;
+
+  --dpi-1: #ff7a45;
+  --dpi-2: #ffd166;
+  --dpi-3: #5ad19a;
+  --dpi-4: #6aa5ff;
+  --dpi-5: #ff5c5c;
+  --dpi-6: #ff9e6b;
+  --dpi-7: #c98bff;
+  --dpi-8: #4fd0c0;
+
+  --font-display: 'Inter Variable', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+
+  --frame-corner: 6px;
+  --frame-border-blend: linear-gradient(135deg, var(--c-primary) 0%, var(--c-line-bright) 30%, var(--c-line-bright) 70%, var(--c-secondary) 100%);
+  --glow-mult: 0.3;
+
+  --bg-radial-1: radial-gradient(ellipse at top, color-mix(in oklab, var(--c-primary) 5%, transparent), transparent 60%);
+  --bg-radial-2: radial-gradient(ellipse at bottom right, color-mix(in oklab, var(--c-secondary) 3%, transparent), transparent 60%);
+
+  --noise-opacity: 0;
+  --scanline-opacity: 0;
+  --scanline-step: 4px;
 }
 
-[data-theme='xbox'] .panel-root > :not(.xbox-bg) {
-  position: relative;
-  z-index: 1;
+/* ============================================================
+   Nebula: electric violet + teal on near-black — a deep-space
+   console. Cosmic without sacrificing legibility.
+   ============================================================ */
+
+[data-theme='nebula'] {
+  --c-bg: #070510;
+  --c-bg-panel: #110c22;
+  --c-bg-panel-2: #190f33;
+  --c-bg-overlay: rgba(7, 5, 16, 0.76);
+
+  --c-line: #241748;
+  --c-line-bright: #3a2470;
+
+  --c-primary: #b28bff;
+  --c-secondary: #5eead4;
+  --c-ok: #6ee7a8;
+  --c-warn: #fbc04d;
+  --c-err: #ff6b8b;
+
+  --c-text-bright: #efe9ff;
+  --c-text: #b6a8d6;
+  --c-text-dim: #7d6fa8;
+
+  --dpi-1: #b28bff;
+  --dpi-2: #5eead4;
+  --dpi-3: #f472b6;
+  --dpi-4: #7dd3fc;
+  --dpi-5: #fbc04d;
+  --dpi-6: #a78bfa;
+  --dpi-7: #34d399;
+  --dpi-8: #ff6b8b;
+
+  --font-display: 'Inter Variable', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+
+  --frame-corner: 14px;
+  --frame-border-blend: linear-gradient(135deg, var(--c-primary) 0%, var(--c-line-bright) 30%, var(--c-line-bright) 70%, var(--c-secondary) 100%);
+  --glow-mult: 0.42;
+
+  --bg-radial-1: radial-gradient(ellipse at top, color-mix(in oklab, var(--c-primary) 8%, transparent), transparent 58%);
+  --bg-radial-2: radial-gradient(ellipse at bottom, color-mix(in oklab, var(--c-secondary) 5%, transparent), transparent 62%);
+
+  --noise-opacity: 0;
+  --scanline-opacity: 0;
+  --scanline-step: 4px;
 }
 
-.xbox-pulse {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 80vmax;
-  height: 80vmax;
-  margin: -40vmax 0 0 -40vmax;
-  background: radial-gradient(
-    circle,
-    color-mix(in oklab, var(--c-primary) 28%, transparent) 0%,
-    color-mix(in oklab, var(--c-primary) 8%, transparent) 30%,
-    transparent 60%
-  );
-  animation: xbox-pulse 7s ease-in-out infinite;
-  will-change: transform, opacity;
-}
-
-@keyframes xbox-pulse {
-  0%,
-  100% {
-    transform: scale(0.95);
-    opacity: 0.55;
-  }
-  50% {
-    transform: scale(1.12);
-    opacity: 0.95;
-  }
-}
-
-.xbox-ring {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 220px;
-  height: 220px;
-  margin: -110px 0 0 -110px;
-  border: 1px solid color-mix(in oklab, var(--c-primary) 70%, transparent);
-  border-radius: 50%;
-  opacity: 0;
-  box-shadow: 0 0 calc(12px * var(--glow-mult)) color-mix(in oklab, var(--c-primary) 50%, transparent);
-  animation: xbox-ring 9s linear infinite;
-  will-change: transform, opacity;
-}
-.xbox-ring-2 {
-  animation-delay: 3s;
-}
-.xbox-ring-3 {
-  animation-delay: 6s;
-}
-
-@keyframes xbox-ring {
-  0% {
-    transform: scale(0.15);
-    opacity: 0;
-  }
-  10% {
-    opacity: 0.55;
-  }
-  100% {
-    transform: scale(9);
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .xbox-pulse,
-  .xbox-ring {
-    animation: none;
-  }
-  .xbox-pulse {
-    opacity: 0.7;
-  }
-}
-
-/* Let the Xbox bg animation show through panels and tiles. The default
-   HUD theme keeps its solid panels for legibility; Xbox trades some
-   contrast for the visible animated background. */
-[data-theme='xbox'] .hud-frame {
-  background: linear-gradient(
-    180deg,
-    color-mix(in oklab, var(--c-bg-panel) 90%, transparent),
-    color-mix(in oklab, var(--c-bg-panel-2) 90%, transparent)
-  );
-  backdrop-filter: blur(1px);
-}
 
 /* ============================================================
    Global resets + body chrome

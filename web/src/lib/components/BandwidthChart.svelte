@@ -303,7 +303,7 @@
     </div>
   </div>
 
-  <div bind:this={container} class="relative flex-1">
-    <canvas bind:this={canvas}></canvas>
+  <div bind:this={container} class="relative min-h-0 flex-1 overflow-hidden">
+    <canvas bind:this={canvas} class="absolute inset-0 block"></canvas>
   </div>
 </div>
