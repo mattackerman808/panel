@@ -1,0 +1,31 @@
+[Unit]
+Description=panel - network monitoring dashboard (server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PANEL_DIR__
+EnvironmentFile=__PANEL_DIR__/.env
+# Bind to loopback only — the reverse proxy (Apache/Caddy/nginx) is the
+# public face and terminates TLS. Override HOST in .env if you want the
+# server itself exposed on the LAN.
+Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node server/dist/index.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Hardening — this service only needs to read its own dir and talk to the
+# network. data/ (monthly counters) stays writable.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__PANEL_DIR__/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
