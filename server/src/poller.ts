@@ -1,10 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { config } from './config.js';
-import { mockClients, mockDevices, mockDpi, mockHealth, mockUdm, mockWans } from './mock.js';
+import { mockClients, mockDevices, mockDpi, mockHealth, mockUdm, mockUps, mockWans } from './mock.js';
 import { autoDetectWanInterfaces, resolveWanInterfaces, SnmpClient, type SnmpInterface } from './snmp.js';
 import { store } from './store.js';
-import type { ClientStat, DpiCategory, HealthSubsystem, NetworkDevice, UdmInfo, Wan } from './types.js';
+import type { ClientStat, DpiCategory, HealthSubsystem, NetworkDevice, UdmInfo, UpsInfo, Wan } from './types.js';
+import { UpsClient } from './ups.js';
 import { type GatewayWanDetails, UnifiClient } from './unifi.js';
 
 /** Month-to-date counters per WAN, persisted across restarts.
@@ -69,7 +70,7 @@ export async function startPoller(): Promise<void> {
   if (config.mock) {
     console.log('[poller] running in MOCK mode');
     store.setSource('mock');
-    store.setFeatures({ dpiAvailable: true, perClientRates: true, snmpAvailable: true });
+    store.setFeatures({ dpiAvailable: true, perClientRates: true, snmpAvailable: true, upsAvailable: true });
     let lastClients: ClientStat[] = [];
     let lastDpi: DpiCategory[] = [];
     let lastDpiCategories: DpiCategory[] = [];
@@ -106,6 +107,7 @@ export async function startPoller(): Promise<void> {
         udm: lastUdm ?? undefined,
         devices: lastDevices.length ? lastDevices : undefined,
         health: lastHealth.length ? lastHealth : undefined,
+        ups: mockUps(),
       });
     };
     tick();
@@ -138,9 +140,26 @@ export async function startPoller(): Promise<void> {
       dpiAvailable: legacy,
       perClientRates: legacy,
       snmpAvailable,
+      upsAvailable: config.ups.enabled,
     });
   };
   publishFeatures(false);
+
+  // === UPS setup (optional; independent of the UDM). Polled on its own
+  //     cadence and pushed with each tick. A missing/unreachable UPS never
+  //     blocks the WAN pipeline — poll errors just null out `lastUps`. ===
+  const upsClient = config.ups.enabled
+    ? new UpsClient({
+        host: config.ups.host,
+        community: config.ups.community,
+        port: config.ups.port,
+      })
+    : null;
+  let lastUps: UpsInfo | null = null;
+  let upsAt = 0;
+  if (upsClient) {
+    console.log(`[poller] UPS SNMP enabled at ${config.ups.host}`);
+  }
 
   // === SNMP setup ===
   const snmpClient = new SnmpClient({
@@ -433,6 +452,24 @@ export async function startPoller(): Promise<void> {
           .catch((e) => console.error('[poller] wan details error', e)),
       );
     }
+
+    // UPS: independent SNMP poll on its own cadence. A timeout (UPS down or
+    // unreachable) nulls the reading rather than throwing — the dashboard
+    // then shows the UPS as unreachable instead of dropping the whole tick.
+    if (upsClient && now - upsAt >= config.poll.upsMs) {
+      upsAt = now;
+      tasks.push(
+        upsClient
+          .poll()
+          .then((u) => {
+            lastUps = u;
+          })
+          .catch((e) => {
+            lastUps = lastUps ? { ...lastUps, reachable: false } : null;
+            console.error('[poller] ups poll error', e instanceof Error ? e.message : e);
+          }),
+      );
+    }
     await Promise.all(tasks);
 
     // Monthly accumulator: roll over on calendar-month change, then add
@@ -506,6 +543,7 @@ export async function startPoller(): Promise<void> {
       udm: lastUdm ?? undefined,
       devices: lastDevices.length ? lastDevices : undefined,
       health: lastHealth.length ? lastHealth : undefined,
+      ups: lastUps ?? undefined,
     });
   };
 

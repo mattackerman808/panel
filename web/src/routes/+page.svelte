@@ -18,9 +18,10 @@
   import TopTalkersTotalPanel from '$lib/components/TopTalkersTotalPanel.svelte';
   import SwitchDetailPanel from '$lib/components/SwitchDetailPanel.svelte';
   import WanStatusCard from '$lib/components/WanStatusCard.svelte';
+  import UpsPanel from '$lib/components/UpsPanel.svelte';
   import '../app.css';
 
-  const PAGE_COUNT = 5;
+  const PAGE_COUNT = 6;
   const AUTO_CYCLE_MS = 30_000;
   let currentPage = $state(0);
   let paused = $state(false);
@@ -224,6 +225,25 @@
             {/snippet}
             {#snippet children()}
               <TopologyPanel />
+            {/snippet}
+          </HudFrame>
+        </main>
+      </section>
+
+      <!-- ============= PAGE 6: Power (UPS) ============= -->
+      <section class="page" class:active={currentPage === 5}>
+        <main class="grid h-full min-h-0 gap-4 p-4" style="grid-template-columns: 1fr; grid-template-rows: 1fr;">
+          <HudFrame label="POWER · UPS" accent="secondary">
+            {#snippet actions()}
+              {@const u = panel.ups}
+              <span>
+                {#if !panel.features.upsAvailable}NOT CONFIGURED
+                {:else if u?.reachable}{u.onBattery ? 'ON BATTERY' : 'ON MAINS'}{#if u.loadPct != null} · {u.loadPct.toFixed(0)}% LOAD{/if}
+                {:else}UNREACHABLE{/if}
+              </span>
+            {/snippet}
+            {#snippet children()}
+              <UpsPanel />
             {/snippet}
           </HudFrame>
         </main>

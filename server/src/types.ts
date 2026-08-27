@@ -109,6 +109,39 @@ export type UdmInfo = {
   tempC: number | null;
 };
 
+/** Normalized UPS power state, sourced from SNMP (RFC 1628 UPS-MIB, with
+ *  APC PowerNet fallback). Every measurement is nullable because a given
+ *  UPS may implement only part of the MIB. `reachable` is false when the
+ *  UPS SNMP agent didn't answer this poll. */
+export type UpsInfo = {
+  reachable: boolean;
+  manufacturer: string | null;
+  model: string | null;
+  batteryStatus: 'normal' | 'low' | 'depleted' | 'unknown';
+  /** True when the UPS is running off its battery (mains lost). */
+  onBattery: boolean;
+  /** Seconds elapsed since the transfer to battery (0 when on mains). */
+  secondsOnBattery: number | null;
+  /** Estimated battery runtime remaining, in minutes. */
+  minutesRemaining: number | null;
+  /** Battery charge as a percent (0–100). */
+  chargePct: number | null;
+  batteryVoltage: number | null;
+  batteryTempC: number | null;
+  /** Incoming mains (line) RMS voltage and frequency. */
+  inputVoltage: number | null;
+  inputFrequencyHz: number | null;
+  /** Where the UPS is currently drawing output power from. */
+  outputSource: 'normal' | 'battery' | 'bypass' | 'booster' | 'reducer' | 'none' | 'other' | 'unknown';
+  outputVoltage: number | null;
+  outputFrequencyHz: number | null;
+  outputCurrentA: number | null;
+  /** Real output power in Watts, when the UPS reports it. */
+  outputPowerW: number | null;
+  /** Output load as a percent of the UPS's rated capacity. */
+  loadPct: number | null;
+};
+
 export type PortNeighbor = {
   /** Lower-cased mac of the device on the other end of this link. */
   chassisId: string;
@@ -180,10 +213,12 @@ export type Snapshot = {
   udm: UdmInfo | null;
   devices: NetworkDevice[];
   health: HealthSubsystem[];
+  ups: UpsInfo | null;
   features: {
     dpiAvailable: boolean;
     perClientRates: boolean;
     snmpAvailable: boolean;
+    upsAvailable: boolean;
   };
 };
 
@@ -197,6 +232,7 @@ export type Tick = {
   udm?: UdmInfo;
   devices?: NetworkDevice[];
   health?: HealthSubsystem[];
+  ups?: UpsInfo;
 };
 
 export type WsMessage =

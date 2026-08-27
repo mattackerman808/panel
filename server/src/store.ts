@@ -7,6 +7,7 @@ import type {
   Snapshot,
   Tick,
   UdmInfo,
+  UpsInfo,
   Wan,
   WanSample,
 } from './types.js';
@@ -25,7 +26,8 @@ const state = {
   udm: null as UdmInfo | null,
   devices: [] as NetworkDevice[],
   health: [] as HealthSubsystem[],
-  features: { dpiAvailable: false, perClientRates: false, snmpAvailable: false },
+  ups: null as UpsInfo | null,
+  features: { dpiAvailable: false, perClientRates: false, snmpAvailable: false, upsAvailable: false },
 };
 
 const listeners = new Set<Listener>();
@@ -47,6 +49,7 @@ export const store = {
     udm?: UdmInfo;
     devices?: NetworkDevice[];
     health?: HealthSubsystem[];
+    ups?: UpsInfo;
   }): void {
     const ts = Date.now();
     state.wans = input.wans;
@@ -56,6 +59,7 @@ export const store = {
     if (input.udm) state.udm = input.udm;
     if (input.devices) state.devices = input.devices;
     if (input.health) state.health = input.health;
+    if (input.ups) state.ups = input.ups;
 
     const samples: Tick['samples'] = [];
     for (const w of input.wans) {
@@ -79,6 +83,7 @@ export const store = {
       ...(input.udm ? { udm: input.udm } : {}),
       ...(input.devices ? { devices: input.devices } : {}),
       ...(input.health ? { health: input.health } : {}),
+      ...(input.ups ? { ups: input.ups } : {}),
     };
 
     for (const l of listeners) {
@@ -103,6 +108,7 @@ export const store = {
       udm: state.udm,
       devices: state.devices,
       health: state.health,
+      ups: state.ups,
       features: { ...state.features },
     };
   },
