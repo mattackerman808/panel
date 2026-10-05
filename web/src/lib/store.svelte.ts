@@ -64,8 +64,20 @@ class PanelStore {
   events = $state<PanelEvent[]>([]);
   features = $state<Features>(DEFAULT_FEATURES);
   lastTickAt = $state(0);
+  /** Server process id from the first snapshot; a different one later means
+   *  the server was restarted (most likely upgraded) and the page reloads
+   *  so the kiosk picks up the new bundle. */
+  private buildId: string | null = null;
 
   applySnapshot(s: Snapshot): void {
+    if (s.buildId) {
+      if (this.buildId && this.buildId !== s.buildId && typeof location !== 'undefined') {
+        // Stagger slightly so several kiosks don't hammer the server at once.
+        setTimeout(() => location.reload(), 500 + Math.random() * 2500);
+        return;
+      }
+      this.buildId = s.buildId;
+    }
     this.source = s.source;
     this.serverUptimeSec = s.serverUptimeSec;
     this.ui = { ...DEFAULT_UI, ...(s.ui ?? {}) };

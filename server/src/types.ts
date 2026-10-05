@@ -367,6 +367,10 @@ export type Snapshot = {
   ts: number;
   source: 'live' | 'mock';
   serverUptimeSec: number;
+  /** Changes whenever the server process (re)starts. A kiosk that
+   *  reconnects and sees a new id reloads itself, so a package upgrade
+   *  reaches the screen without anyone touching the Pi. */
+  buildId: string;
   ui: UiConfig;
   wans: Wan[];
   histories: Record<string, WanSample[]>;

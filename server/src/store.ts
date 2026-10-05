@@ -23,6 +23,8 @@ import type {
 type Listener = (tick: Tick) => void;
 
 const startTs = Date.now();
+/** Identifies this server process; see Snapshot.buildId. */
+const buildId = process.env.PANEL_BUILD_ID ?? startTs.toString(36);
 
 /** UPS polls every 5s; keep the history at the device cadence instead so an
  *  hour fits in the ring buffer. */
@@ -295,6 +297,7 @@ export const store = {
       ts: Date.now(),
       source: state.source,
       serverUptimeSec: Math.floor((Date.now() - startTs) / 1000),
+      buildId,
       ui: { siteName: config.ui.siteName, pages: config.ui.pages, dwellMs: config.ui.dwellMs },
       wans: state.wans,
       histories: Object.fromEntries(Object.entries(state.histories).map(([k, v]) => [k, v.slice()])),
