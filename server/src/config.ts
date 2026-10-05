@@ -35,15 +35,33 @@ function num(v: string | undefined, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
+function list(v: string | undefined): string[] {
+  return (v ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 const mockEnv = bool(process.env.PANEL_MOCK, false);
 const hasApiKey = !!process.env.UDM_API_KEY;
 const hasUserPass = !!process.env.UDM_USERNAME && !!process.env.UDM_PASSWORD;
 const hasHost = !!process.env.UDM_HOST;
 
+const uiPages = list(process.env.PANEL_UI_PAGES);
+
 export const config = {
   port: num(process.env.PORT, 4000),
   host: process.env.HOST ?? '0.0.0.0',
   mock: mockEnv || !hasHost || (!hasApiKey && !hasUserPass),
+  ui: {
+    // Shown in the top bar. Defaults to a neutral label so a fresh install
+    // never shows someone else's site name.
+    siteName: process.env.PANEL_SITE_NAME ?? 'Network',
+    // Page rotation is a kiosk concern, but configuring it in panel.env keeps
+    // the Pi's autostart URL plain. Null = the client's default order.
+    pages: uiPages.length > 0 ? uiPages : null,
+    dwellMs: num(process.env.PANEL_UI_DWELL_MS, 24_000),
+  },
   udm: {
     host: process.env.UDM_HOST ?? '',
     apiKey: process.env.UDM_API_KEY ?? '',
@@ -65,14 +83,15 @@ export const config = {
   snmp: {
     community: process.env.UDM_SNMP_COMMUNITY ?? 'public',
     port: num(process.env.UDM_SNMP_PORT, 161),
-    wanIfIndexes: (process.env.UDM_WAN_IFINDEXES ?? '')
-      .split(',')
-      .map((s) => Number.parseInt(s.trim(), 10))
+    wanIfIndexes: list(process.env.UDM_WAN_IFINDEXES)
+      .map((s) => Number.parseInt(s, 10))
       .filter((n) => Number.isFinite(n) && n > 0),
-    wanLabels: (process.env.UDM_WAN_LABELS ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0),
+    wanLabels: list(process.env.UDM_WAN_LABELS),
+    // Optional plan/link speeds per WAN in Mbps (same order as the WANs).
+    // Used for utilization displays when SNMP ifHighSpeed is unreliable.
+    wanSpeedsMbps: list(process.env.UDM_WAN_SPEEDS)
+      .map((s) => Number.parseFloat(s))
+      .map((n) => (Number.isFinite(n) && n > 0 ? n : 0)),
   },
   poll: {
     wanMs: num(process.env.PANEL_POLL_WAN_MS, 2000),
@@ -92,7 +111,11 @@ export const config = {
     recoveryMs: num(process.env.PANEL_POLL_RECOVERY_MS, 30000),
   },
   history: {
-    maxSamples: num(process.env.PANEL_HISTORY_SAMPLES, 180),
+    // WAN throughput samples kept per WAN (2s tick → 450 = 15 minutes),
+    // which is the window the overview chart draws.
+    maxSamples: num(process.env.PANEL_HISTORY_SAMPLES, 450),
+    // Device / gateway / UPS samples (15s cadence → 240 = 1 hour).
+    deviceSamples: num(process.env.PANEL_HISTORY_DEVICE_SAMPLES, 240),
   },
   webDistPath: process.env.PANEL_WEB_DIST ?? '../web/build',
 };

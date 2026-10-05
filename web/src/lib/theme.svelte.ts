@@ -1,18 +1,18 @@
-export const THEMES = ['hud', 'arctic', 'outrun', 'ember', 'nebula'] as const;
+/** Visual themes. All three share one token contract (see app.css); they
+ *  differ in surface tint and accent only — the data colors (download,
+ *  upload, status) are fixed across themes because they carry meaning. */
+export const THEMES = ['graphite', 'arctic', 'ember'] as const;
 export type ThemeName = (typeof THEMES)[number];
 
 export const THEME_LABELS: Record<ThemeName, string> = {
-  hud: 'HUD',
-  arctic: 'ARCTIC',
-  outrun: 'OUTRUN',
-  ember: 'EMBER',
-  nebula: 'NEBULA',
+  graphite: 'Graphite',
+  arctic: 'Arctic',
+  ember: 'Ember',
 };
 
-// Bumped from v2 so kiosks/browsers holding the retired 'xbox' preference
-// fall back to the new HUD default instead of a theme that no longer exists.
-const STORAGE_KEY = 'panel.theme.v3';
-const DEFAULT_THEME: ThemeName = 'hud';
+// Bumped so kiosks holding a retired theme name fall back to the default.
+const STORAGE_KEY = 'panel.theme.v4';
+const DEFAULT_THEME: ThemeName = 'graphite';
 
 function isTheme(v: string | null | undefined): v is ThemeName {
   return !!v && (THEMES as readonly string[]).includes(v);
@@ -75,20 +75,14 @@ class ThemeStore {
     if (e.key === 't' || e.key === 'T') {
       e.preventDefault();
       this.cycle(e.shiftKey ? -1 : 1);
-    } else if (e.key >= '1' && e.key <= '9') {
-      const idx = Number.parseInt(e.key, 10) - 1;
-      if (idx < THEMES.length) {
-        e.preventDefault();
-        this.set(THEMES[idx]!);
-      }
     }
   }
 }
 
 export const theme = new ThemeStore();
 
-/** Read a CSS custom property from :root. Updates when theme changes. */
-export function cssColor(name: string, fallback = '#ffffff'): string {
+/** Read a CSS custom property from :root. Re-read whenever the theme changes. */
+export function cssVar(name: string, fallback = '#ffffff'): string {
   if (typeof document === 'undefined') return fallback;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
