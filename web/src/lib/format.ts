@@ -88,6 +88,15 @@ export function ageFromUnix(ts: number | null | undefined): string {
   return relativeTime(ts * 1000);
 }
 
+/** Compact count: 1284 → "1.3k", 190990 → "191k", 2.4e6 → "2.4M". */
+export function compact(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  const a = Math.abs(n);
+  if (a >= 1e6) return `${(n / 1e6).toFixed(a >= 10e6 ? 0 : 1)}M`;
+  if (a >= 1e3) return `${(n / 1e3).toFixed(a >= 10e3 ? 0 : 1)}k`;
+  return String(Math.round(n));
+}
+
 export function pct(v: number | null | undefined, digits = 0): string {
   if (v == null || !Number.isFinite(v)) return '—';
   return `${v.toFixed(digits)}%`;

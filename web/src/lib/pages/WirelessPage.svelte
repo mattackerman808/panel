@@ -1,6 +1,6 @@
 <script lang="ts">
   import { panel } from '$lib/store.svelte';
-  import { bandLabel, bandShort, deviceNameByMac, retryPct, signalBars, signalTone } from '$lib/derive';
+  import { THRESHOLDS, bandLabel, bandShort, deviceNameByMac, retryPct, signalBars, signalTone } from '$lib/derive';
   import { bps, formatUptime, pct, shortName, speedLabel } from '$lib/format';
   import type { Band, NetworkDevice, NetworkRadio } from '$lib/types';
   import Panel from '$lib/components/Panel.svelte';
@@ -92,16 +92,16 @@
                   <div class="band-top">
                     <span class="mono">ch {r.channel}</span>
                     <span class="cell-sub">{r.bwMhz ? `${r.bwMhz} MHz` : ''}</span>
-                    <span class="num" class:tone-warn={r.utilizationPct >= 70} class:tone-crit={r.utilizationPct >= 90}>{pct(r.utilizationPct)}</span>
+                    <span class="num" class:tone-warn={r.utilizationPct >= THRESHOLDS.radioUtilWarnPct} class:tone-crit={r.utilizationPct >= THRESHOLDS.radioUtilCritPct}>{pct(r.utilizationPct)}</span>
                   </div>
-                  <Meter value={r.utilizationPct} warn={70} crit={90} height={5} />
+                  <Meter value={r.utilizationPct} warn={THRESHOLDS.radioUtilWarnPct} crit={THRESHOLDS.radioUtilCritPct} height={5} />
                 {:else}
                   <span class="dim">—</span>
                 {/if}
               </div>
             {/each}
-            <div class="num" class:tone-warn={retry >= 15}>{pct(retry, 1)}</div>
-            <div class="num" class:tone-warn={ap.satisfaction > 0 && ap.satisfaction < 70}>{ap.satisfaction > 0 ? ap.satisfaction : '—'}</div>
+            <div class="num" class:tone-warn={retry >= THRESHOLDS.radioRetryWarnPct}>{pct(retry, 1)}</div>
+            <div class="num" class:tone-warn={ap.satisfaction > 0 && ap.satisfaction < THRESHOLDS.satisfactionWarn}>{ap.satisfaction > 0 ? ap.satisfaction : '—'}</div>
             <div class="uplink truncate">{uplinkName(ap)}{#if ap.uplinkSpeedMbps}<span class="cell-sub"> · {speedLabel(ap.uplinkSpeedMbps)}</span>{/if}</div>
             <div class="num">{formatUptime(ap.uptimeSec)}</div>
           </div>
@@ -154,7 +154,7 @@
             <div class="chan">
               <span class="truncate">{shortName(x.ap.name)}</span>
               <span class="mono cell-sub">ch {x.r.channel}</span>
-              <Meter value={x.r.utilizationPct} warn={70} crit={90} height={4} />
+              <Meter value={x.r.utilizationPct} warn={THRESHOLDS.radioUtilWarnPct} crit={THRESHOLDS.radioUtilCritPct} height={4} />
             </div>
           {/each}
         </div>
