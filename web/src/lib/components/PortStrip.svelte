@@ -90,6 +90,8 @@
     background: var(--tx);
     box-shadow: 0 0 0 1px var(--surface);
   }
+  /* Lifetime error counters are informational (they never reset until the
+     switch reboots), so the tick is amber, not red. */
   .port.err::before {
     content: '';
     position: absolute;
@@ -98,7 +100,7 @@
     width: 5px;
     height: 5px;
     border-radius: 50%;
-    background: var(--crit);
+    background: var(--warn);
     box-shadow: 0 0 0 1px var(--surface);
   }
 </style>

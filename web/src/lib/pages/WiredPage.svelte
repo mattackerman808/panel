@@ -1,7 +1,7 @@
 <script lang="ts">
   import { panel } from '$lib/store.svelte';
-  import { deriveLinks, deviceNameByMac, poeDraw } from '$lib/derive';
-  import { bps, formatUptime, num, pct, shortName, speedLabel } from '$lib/format';
+  import { THRESHOLDS, deriveLinks, deviceNameByMac, poeDraw } from '$lib/derive';
+  import { bps, compact, formatUptime, num, pct, shortName, speedLabel } from '$lib/format';
   import type { NetworkDevice } from '$lib/types';
   import Panel from '$lib/components/Panel.svelte';
   import PortStrip from '$lib/components/PortStrip.svelte';
@@ -71,7 +71,7 @@
               <span class="dot {sw.state === 1 ? 'ok' : 'crit'}"></span>
               <div class="min-w-0">
                 <div class="cell-name truncate">{shortName(sw.name)}</div>
-                <div class="cell-sub truncate">{sw.modelName}{#if sw.state !== 1} · offline{:else if sw.upgradable} · update available{/if}{#if errors > 0} · <span class="tone-crit">{errors} port errors</span>{/if}</div>
+                <div class="cell-sub truncate">{sw.modelName}{#if sw.state !== 1} · offline{:else if sw.upgradable} · update available{/if}{#if errors > 0} · {compact(errors)} port errors since boot{/if}</div>
               </div>
             </div>
             <div class="ports">
@@ -96,8 +96,8 @@
               {/if}
             </div>
             <div class="num">{sw.numClients}</div>
-            <div class="num" class:tone-warn={(sw.cpuPct ?? 0) >= 85}>{pct(sw.cpuPct)}</div>
-            <div class="num" class:tone-warn={(sw.tempC ?? 0) >= 75}>{sw.tempC == null ? '—' : `${num(sw.tempC)}°`}</div>
+            <div class="num" class:tone-warn={(sw.cpuPct ?? 0) >= THRESHOLDS.deviceCpuWarnPct}>{pct(sw.cpuPct)}</div>
+            <div class="num" class:tone-warn={(sw.tempC ?? 0) >= THRESHOLDS.deviceTempWarnC}>{sw.tempC == null ? '—' : `${num(sw.tempC)}°`}</div>
             <div class="num">{formatUptime(sw.uptimeSec)}</div>
           </div>
         {/each}
@@ -241,7 +241,7 @@
     box-shadow: none;
   }
   .key.err {
-    background: var(--crit);
+    background: var(--warn);
     border-radius: 50%;
     width: 0.4rem;
     height: 0.4rem;
