@@ -33,7 +33,10 @@
   ];
 
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  /** `?page=x` pins one page (no rotation); `?start=x` just begins the normal
+   *  rotation on that page. */
   const pinned = params.get('page');
+  const startAt = params.get('start');
   const urlPages = params.get('pages')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
   const urlDwell = Number(params.get('dwell'));
 
@@ -46,7 +49,7 @@
   });
   const dwellMs = $derived(Number.isFinite(urlDwell) && urlDwell > 0 ? urlDwell * 1000 : panel.ui.dwellMs);
 
-  let index = $state(0);
+  let index = $state(Math.max(0, ALL_PAGES.findIndex((p) => p.id === startAt)));
   let paused = $state(!!pinned);
   let enteredAt = $state(Date.now());
   let now = $state(Date.now());

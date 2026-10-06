@@ -68,18 +68,28 @@
         ...(sec.bendPoints ?? []).map((p) => ({ x: p.x, y: p.y })),
         { x: sec.endPoint.x, y: sec.endPoint.y },
       ];
-      // Label on the longest segment running in the layout direction so it
-      // doesn't sit on a shared bus line.
-      let bestLen = -1;
-      let labelXY = { x: points[0]!.x, y: points[0]!.y };
-      for (let i = 0; i < points.length - 1; i++) {
+      // Label on the final horizontal run into the target node: that segment
+      // belongs to this edge alone, whereas the vertical bus out of a core
+      // switch is shared by a dozen edges and their labels would pile up.
+      let labelXY: { x: number; y: number } | undefined;
+      for (let i = points.length - 2; i >= 0; i--) {
         const a = points[i]!;
         const b = points[i + 1]!;
-        const horizontal = Math.abs(b.y - a.y) < 0.5;
-        const len = Math.hypot(b.x - a.x, b.y - a.y) * (horizontal ? 1.5 : 1);
-        if (len > bestLen) {
-          bestLen = len;
-          labelXY = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        if (Math.abs(b.y - a.y) < 0.5 && Math.abs(b.x - a.x) >= 76) {
+          labelXY = { x: (a.x + b.x) / 2, y: a.y };
+          break;
+        }
+      }
+      if (!labelXY) {
+        let bestLen = -1;
+        for (let i = 0; i < points.length - 1; i++) {
+          const a = points[i]!;
+          const b = points[i + 1]!;
+          const len = Math.hypot(b.x - a.x, b.y - a.y);
+          if (len > bestLen) {
+            bestLen = len;
+            labelXY = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          }
         }
       }
       edgeMap.set(e.id!, { points, labelXY });
@@ -140,18 +150,18 @@
               <rect width={NODE_W} height={NODE_H} rx="8" fill="var(--surface-2)" stroke="var(--line-strong)" />
               <rect x="0" y="0" width="4" height={NODE_H} rx="2" fill="var(--tx)" />
               <text x="14" y="21" class="name">{w.label}</text>
-              <text x="14" y="39" class="meta">WAN · {w.ispName ?? w.ifName}{w.speedBitsPerSec > 0 ? ` · ${speedLabel(w.speedBitsPerSec / 1e6)}` : ''}</text>
-              <text x={NODE_W - 12} y="39" text-anchor="end" class="rate">↓ {bps(w.rxBps)}</text>
-              <circle cx={NODE_W - 12} cy="14" r="4" fill={w.status === 'ok' ? 'var(--ok)' : w.status === 'degraded' ? 'var(--warn)' : 'var(--crit)'} />
+              <text x={NODE_W - 24} y="21" text-anchor="end" class="rate">↓ {bps(w.rxBps)}</text>
+              <text x="14" y="39" class="meta">{w.ispName ?? w.ifName}{w.speedBitsPerSec > 0 ? ` · ${speedLabel(w.speedBitsPerSec / 1e6)}` : ''}</text>
+              <circle cx={NODE_W - 12} cy="21" r="4" fill={w.status === 'ok' ? 'var(--ok)' : w.status === 'degraded' ? 'var(--warn)' : 'var(--crit)'} />
             {:else}
               {@const d = node.device}
               {@const up = d.state === 1}
               <rect width={NODE_W} height={NODE_H} rx="8" fill="var(--surface-2)" stroke={up ? 'var(--line-strong)' : 'var(--crit)'} />
               <rect x="0" y="0" width="4" height={NODE_H} rx="2" fill={d.type === 'udm' ? 'var(--accent)' : d.type === 'uap' ? 'var(--ok)' : 'var(--rx)'} opacity={up ? 1 : 0.4} />
               <text x="14" y="21" class="name">{shortName(d.name)}</text>
-              <text x="14" y="39" class="meta">{deviceTypeLabel(d.type)} · {d.modelName}</text>
-              <text x={NODE_W - 12} y="39" text-anchor="end" class="rate">{d.type === 'uap' ? `${d.numClients} cl · ` : ''}{bps(d.bytesRate)}</text>
-              <circle cx={NODE_W - 12} cy="14" r="4" fill={up ? 'var(--ok)' : 'var(--crit)'} />
+              <text x={NODE_W - 24} y="21" text-anchor="end" class="rate">{bps(d.bytesRate)}</text>
+              <text x="14" y="39" class="meta">{d.type === 'uci' ? deviceTypeLabel(d.type) : d.modelName}{d.type === 'uap' ? ` · ${d.numClients} clients` : ''}</text>
+              <circle cx={NODE_W - 12} cy="21" r="4" fill={up ? 'var(--ok)' : 'var(--crit)'} />
             {/if}
           </g>
         {/if}

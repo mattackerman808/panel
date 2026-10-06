@@ -71,7 +71,7 @@
               <span class="dot {sw.state === 1 ? 'ok' : 'crit'}"></span>
               <div class="min-w-0">
                 <div class="cell-name truncate">{shortName(sw.name)}</div>
-                <div class="cell-sub truncate">{sw.modelName}{#if sw.state !== 1} · offline{:else if sw.upgradable} · update available{/if}{#if errors > 0} · {compact(errors)} port errors since boot{/if}</div>
+                <div class="cell-sub truncate">{sw.modelName}{#if sw.state !== 1} · offline{:else if sw.upgradable} · update available{/if}{#if errors > 0} · {compact(errors)} port errors{/if}</div>
               </div>
             </div>
             <div class="ports">

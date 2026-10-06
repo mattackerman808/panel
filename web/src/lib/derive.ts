@@ -15,10 +15,15 @@ export const THRESHOLDS = {
   linkUtilCrit: 0.95,
   radioUtilWarnPct: 70,
   radioUtilCritPct: 90,
-  // UniFi's retry ratio runs 15–30% on healthy 2.4 GHz radios in a busy RF
-  // neighborhood (measured on the live site), so only flag the clearly
-  // pathological case.
+  // UniFi's per-interval retry ratio sits at 5–30% on healthy radios in a
+  // busy RF neighborhood (measured on the live site), so only flag the
+  // clearly pathological case.
   radioRetryWarnPct: 40,
+  // Bands whose airtime/retry figures raise alerts. 2.4 GHz is left out on
+  // purpose: it carries the IoT network and shares the air with hundreds of
+  // neighboring APs, so high utilization there is the normal condition. Its
+  // meters still show on the Wireless page.
+  radioAlertBands: ['5g', '6g'] as readonly Band[],
   deviceCpuWarnPct: 85,
   deviceTempWarnC: 75,
   gatewayCpuWarnPct: 85,
@@ -97,6 +102,7 @@ export function deriveAlerts(s: AlertInput): Alert[] {
       if (draw / d.poeBudgetW >= THRESHOLDS.poeBudgetWarn) add('warn', name, `PoE ${draw.toFixed(0)} / ${d.poeBudgetW} W`, 'wired');
     }
     for (const r of d.radios) {
+      if (!THRESHOLDS.radioAlertBands.includes(r.band)) continue;
       const label = `${bandLabel(r.band)} ch ${r.channel}`;
       if (r.utilizationPct >= THRESHOLDS.radioUtilCritPct) add('crit', name, `${label} utilization ${pct(r.utilizationPct)}`, 'wireless');
       else if (r.utilizationPct >= THRESHOLDS.radioUtilWarnPct) add('warn', name, `${label} utilization ${pct(r.utilizationPct)}`, 'wireless');

@@ -83,19 +83,20 @@
     </div>
   </div>
 
+  {#if probes.length > 0}
+    <div class="probes" class:compact={!detail}>
+      {#each probes.slice(0, detail ? probes.length : 4) as p (p.type + p.target)}
+        <div class="probe">
+          <span class="probe-name truncate">{p.label}</span>
+          <span class="probe-kind">{p.kind}</span>
+          <Meter value={Math.min(100, (p.latencyMs ?? 0))} warn={60} crit={150} height={4} />
+          <span class="num">{p.latencyMs}<span class="unit">ms</span></span>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
   {#if detail}
-    {#if probes.length > 0}
-      <div class="probes">
-        {#each probes as p (p.type + p.target)}
-          <div class="probe">
-            <span class="probe-name truncate">{p.label}</span>
-            <span class="probe-kind">{p.kind}</span>
-            <Meter value={Math.min(100, (p.latencyMs ?? 0))} warn={60} crit={150} height={4} />
-            <span class="num">{p.latencyMs}<span class="unit">ms</span></span>
-          </div>
-        {/each}
-      </div>
-    {/if}
     <div class="daily">
       <div class="daily-head">
         <span class="eyebrow">Daily usage · 31 days</span>
@@ -201,6 +202,10 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.35rem 1.4rem;
+  }
+  .probes.compact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.3rem;
   }
   .probe {
     display: grid;
