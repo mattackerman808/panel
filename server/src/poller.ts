@@ -1,45 +1,69 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { config } from './config.js';
-import { mockClients, mockDevices, mockDpi, mockHealth, mockUdm, mockUps, mockWans } from './mock.js';
+import { createMockWorld } from './mock.js';
 import { autoDetectWanInterfaces, resolveWanInterfaces, SnmpClient, type SnmpInterface } from './snmp.js';
 import { store } from './store.js';
-import type { ClientStat, DpiCategory, HealthSubsystem, NetworkDevice, UdmInfo, UpsInfo, Wan } from './types.js';
+import type {
+  ClientStat,
+  DailyUsage,
+  DpiCategory,
+  HealthSubsystem,
+  NetworkDevice,
+  UdmInfo,
+  UpsInfo,
+  Wan,
+  WanStatus,
+} from './types.js';
 import { UpsClient } from './ups.js';
 import { type GatewayWanDetails, UnifiClient } from './unifi.js';
 
-/** Month-to-date counters per WAN, persisted across restarts.
+/** Month-to-date and per-day counters per WAN, persisted across restarts.
  *
  *  The scheme is delta-based: each tick we compute `currentTotal - lastTotal`,
- *  add it to `monthRx/monthTx`, and update `lastTotal`. A negative delta
- *  (UDM/SNMP counter reset) is treated as 0. On month rollover the
- *  monthly bucket resets and `lastTotal` is re-seeded from the current
- *  total. This survives both UDM reboots and panel-server restarts. */
+ *  add it to the month bucket and today's bucket, and update `lastTotal`. A
+ *  negative delta (UDM/SNMP counter reset) is treated as 0. On month rollover
+ *  the monthly bucket resets and `lastTotal` is re-seeded from the current
+ *  total. Day buckets are keyed by date so they survive the month rollover
+ *  and give the UI a trailing 31-day usage history. */
 type MonthlyEntry = { lastRx: number; lastTx: number; monthRx: number; monthTx: number };
-type MonthlyState = { month: string; wans: Record<string, MonthlyEntry> };
+type DayEntry = { rx: number; tx: number };
+type MonthlyState = {
+  month: string;
+  wans: Record<string, MonthlyEntry>;
+  /** wanId → YYYY-MM-DD → bytes */
+  days: Record<string, Record<string, DayEntry>>;
+};
 
 const MONTHLY_PATH = join(process.cwd(), 'data', 'monthly.json');
 const MONTHLY_WRITE_INTERVAL_MS = 30_000;
+const DAYS_KEPT = 31;
 
 /** Consecutive failed getCounters polls before we assume our latched
  *  ifIndexes are stale and fall back to re-discovery. At the default 2s
  *  tick that's ~30s of failures. */
 const COUNTER_FAILURE_LIMIT = 15;
 
-function currentMonthLabel(): string {
-  const d = new Date();
+function currentMonthLabel(d = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function currentDayLabel(d = new Date()): string {
+  return `${currentMonthLabel(d)}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function loadMonthlyState(): MonthlyState {
   try {
     const text = readFileSync(MONTHLY_PATH, 'utf8');
-    const parsed = JSON.parse(text) as MonthlyState;
-    if (parsed && typeof parsed.month === 'string' && parsed.wans) return parsed;
+    const parsed = JSON.parse(text) as Partial<MonthlyState>;
+    if (parsed && typeof parsed.month === 'string' && parsed.wans) {
+      // `days` arrived with the daily-usage feature; older files lack it.
+      return { month: parsed.month, wans: parsed.wans, days: parsed.days ?? {} };
+    }
   } catch {
     // first run, missing file, or corrupt — fall through to fresh state
   }
-  return { month: currentMonthLabel(), wans: {} };
+  return { month: currentMonthLabel(), wans: {}, days: {} };
 }
 
 function saveMonthlyState(state: MonthlyState): void {
@@ -49,6 +73,18 @@ function saveMonthlyState(state: MonthlyState): void {
   } catch (err) {
     console.error('[poller] failed to persist monthly state:', err);
   }
+}
+
+/** Flatten the day buckets into the wire shape (oldest first, last 31 days)
+ *  and prune anything older from the state. */
+function usageDailyFrom(state: MonthlyState): Record<string, DailyUsage[]> {
+  const out: Record<string, DailyUsage[]> = {};
+  for (const [wanId, days] of Object.entries(state.days)) {
+    const dates = Object.keys(days).sort();
+    for (const stale of dates.slice(0, Math.max(0, dates.length - DAYS_KEPT))) delete days[stale];
+    out[wanId] = dates.slice(-DAYS_KEPT).map((date) => ({ date, rxBytes: days[date]!.rx, txBytes: days[date]!.tx }));
+  }
+  return out;
 }
 
 type WanRuntime = {
@@ -67,51 +103,15 @@ type WanRuntime = {
 };
 
 export async function startPoller(): Promise<void> {
+  store.recordEvent({
+    severity: 'info',
+    kind: 'server.start',
+    subject: 'panel',
+    message: `Panel server started (${config.mock ? 'mock' : 'live'} mode)`,
+  });
+
   if (config.mock) {
-    console.log('[poller] running in MOCK mode');
-    store.setSource('mock');
-    store.setFeatures({ dpiAvailable: true, perClientRates: true, snmpAvailable: true, upsAvailable: true });
-    let lastClients: ClientStat[] = [];
-    let lastDpi: DpiCategory[] = [];
-    let lastDpiCategories: DpiCategory[] = [];
-    let lastUdm: UdmInfo | null = null;
-    let lastDevices: NetworkDevice[] = [];
-    let lastHealth: HealthSubsystem[] = [];
-    let clientsAt = 0;
-    let dpiAt = 0;
-    let udmAt = 0;
-    const tick = () => {
-      const now = Date.now();
-      const wans = mockWans(config.poll.wanMs);
-      if (now - clientsAt >= config.poll.clientsMs) {
-        clientsAt = now;
-        lastClients = mockClients();
-      }
-      if (now - dpiAt >= config.poll.dpiMs) {
-        dpiAt = now;
-        const { apps, categories } = mockDpi();
-        lastDpi = apps;
-        lastDpiCategories = categories;
-      }
-      if (now - udmAt >= config.poll.udmInfoMs) {
-        udmAt = now;
-        lastUdm = mockUdm();
-        lastDevices = mockDevices();
-        lastHealth = mockHealth(wans);
-      }
-      store.pushTick({
-        wans,
-        clients: lastClients.length ? lastClients : undefined,
-        dpi: lastDpi.length ? lastDpi : undefined,
-        dpiCategories: lastDpiCategories.length ? lastDpiCategories : undefined,
-        udm: lastUdm ?? undefined,
-        devices: lastDevices.length ? lastDevices : undefined,
-        health: lastHealth.length ? lastHealth : undefined,
-        ups: mockUps(),
-      });
-    };
-    tick();
-    setInterval(tick, config.poll.wanMs);
+    await startMockPoller();
     return;
   }
 
@@ -126,12 +126,15 @@ export async function startPoller(): Promise<void> {
   });
 
   let unifiOk = false;
+  let controllerOutageEvented = false;
   try {
     await unifi.connect();
     unifiOk = true;
     console.log(`[poller] connected to UDM API at ${config.udm.host} (mode: ${unifi.getMode()})`);
   } catch (err) {
     console.error('[poller] UDM API connection failed:', err);
+    store.recordEvent({ severity: 'warn', kind: 'controller.lost', subject: 'UniFi', message: 'UniFi controller unreachable' });
+    controllerOutageEvented = true;
   }
   store.setSource('live');
   const publishFeatures = (snmpAvailable: boolean): void => {
@@ -141,6 +144,7 @@ export async function startPoller(): Promise<void> {
       perClientRates: legacy,
       snmpAvailable,
       upsAvailable: config.ups.enabled,
+      controllerAvailable: unifiOk,
     });
   };
   publishFeatures(false);
@@ -221,6 +225,7 @@ export async function startPoller(): Promise<void> {
   // counters are keyed by `wan1`/`wan2` and survive the swap.
   let wans: WanRuntime[] = [];
   let snmpOk = false;
+  let snmpOutageEvented = false;
   let recoveryAt = 0;
   let counterFailures = 0;
 
@@ -246,6 +251,10 @@ export async function startPoller(): Promise<void> {
     snmpOk = wans.length > 0;
     counterFailures = 0;
     publishFeatures(snmpOk);
+    if (snmpOk && snmpOutageEvented) {
+      snmpOutageEvented = false;
+      store.recordEvent({ severity: 'info', kind: 'snmp.ok', subject: 'SNMP', message: `WAN telemetry restored (${fmtIfaces(wans)})` });
+    }
   };
 
   // Startup discovery with a short backoff, so the common transient case
@@ -271,19 +280,18 @@ export async function startPoller(): Promise<void> {
     console.error(
       `[poller] starting without WAN interfaces — retrying every ${config.poll.recoveryMs}ms`,
     );
+    snmpOutageEvented = true;
+    store.recordEvent({ severity: 'warn', kind: 'snmp.lost', subject: 'SNMP', message: 'WAN telemetry unavailable — SNMP discovery found no WAN interfaces' });
   }
 
-  // Per-WAN public IP discovery is deferred — the legacy /stat/health only
-  // exposes one entry without an ifname tying it to a specific interface.
-  const wanIpsByIfName: Record<string, string | null> = {};
-
-  // Monthly counter state: rebuilt from on-disk state at startup so a
+  // Monthly/daily counter state: rebuilt from on-disk state at startup so a
   // panel-server restart doesn't lose month-to-date numbers.
   const monthly = loadMonthlyState();
   let monthlyDirty = false;
   let monthlySavedAt = 0;
-  // Per-WAN gateway details (IPv6, latest WAN IP) refreshed on the
-  // udmInfoMs cadence — lifetime byte counters from the gateway aren't
+  let usageDailyOut: Record<string, DailyUsage[]> | null = usageDailyFrom(monthly);
+  // Per-WAN gateway details (IPv6, latest WAN IP, negotiated speed) refreshed
+  // on the udmInfoMs cadence — lifetime byte counters from the gateway aren't
   // used for monthly tracking (SNMP is more frequent and authoritative).
   let lastWanDetails: GatewayWanDetails[] = [];
 
@@ -340,6 +348,10 @@ export async function startPoller(): Promise<void> {
           unifiOk = true;
           console.log(`[poller] UDM API recovered (mode: ${unifi.getMode()})`);
           publishFeatures(snmpOk);
+          if (controllerOutageEvented) {
+            controllerOutageEvented = false;
+            store.recordEvent({ severity: 'info', kind: 'controller.ok', subject: 'UniFi', message: 'UniFi controller reachable again' });
+          }
         } catch (err) {
           console.error('[poller] UDM API still unreachable:', err);
         }
@@ -388,12 +400,28 @@ export async function startPoller(): Promise<void> {
           snmpOk = false;
           publishFeatures(false);
           recoveryAt = 0;
+          if (!snmpOutageEvented) {
+            snmpOutageEvented = true;
+            store.recordEvent({ severity: 'warn', kind: 'snmp.lost', subject: 'SNMP', message: 'WAN telemetry lost — SNMP counters stopped answering' });
+          }
         }
       }
     }
 
-    // Legacy: clients (slow poll due to UDM cache)
+    // Controller calls on their slower cadences. A failure on any of them
+    // marks the controller down so the recovery loop re-authenticates.
     const tasks: Promise<unknown>[] = [];
+    const controllerFailed = (what: string) => (e: unknown) => {
+      console.error(`[poller] ${what} error`, e);
+      if (unifiOk && isConnectivityError(e)) {
+        unifiOk = false;
+        publishFeatures(snmpOk);
+        if (!controllerOutageEvented) {
+          controllerOutageEvented = true;
+          store.recordEvent({ severity: 'warn', kind: 'controller.lost', subject: 'UniFi', message: 'UniFi controller stopped responding' });
+        }
+      }
+    };
     if (unifiOk && now - clientsAt >= config.poll.clientsMs) {
       clientsAt = now;
       tasks.push(
@@ -402,7 +430,7 @@ export async function startPoller(): Promise<void> {
           .then((c) => {
             lastClients = deriveClientRates(c);
           })
-          .catch((e) => console.error('[poller] clients error', e)),
+          .catch(controllerFailed('clients')),
       );
     }
     if (unifiOk && now - dpiAt >= config.poll.dpiMs) {
@@ -414,7 +442,7 @@ export async function startPoller(): Promise<void> {
             lastDpi = apps;
             lastDpiCategories = categories;
           })
-          .catch((e) => console.error('[poller] dpi error', e)),
+          .catch(controllerFailed('dpi')),
       );
     }
     if (unifiOk && now - udmAt >= config.poll.udmInfoMs) {
@@ -425,7 +453,7 @@ export async function startPoller(): Promise<void> {
           .then((u) => {
             if (u) lastUdm = u;
           })
-          .catch((e) => console.error('[poller] udm info error', e)),
+          .catch(controllerFailed('udm info')),
       );
       tasks.push(
         unifi
@@ -433,7 +461,7 @@ export async function startPoller(): Promise<void> {
           .then((d) => {
             lastDevices = d;
           })
-          .catch((e) => console.error('[poller] devices error', e)),
+          .catch(controllerFailed('devices')),
       );
       tasks.push(
         unifi
@@ -441,7 +469,7 @@ export async function startPoller(): Promise<void> {
           .then((h) => {
             lastHealth = h;
           })
-          .catch((e) => console.error('[poller] health error', e)),
+          .catch(controllerFailed('health')),
       );
       tasks.push(
         unifi
@@ -449,7 +477,7 @@ export async function startPoller(): Promise<void> {
           .then((d) => {
             lastWanDetails = d;
           })
-          .catch((e) => console.error('[poller] wan details error', e)),
+          .catch(controllerFailed('wan details')),
       );
     }
 
@@ -472,10 +500,11 @@ export async function startPoller(): Promise<void> {
     }
     await Promise.all(tasks);
 
-    // Monthly accumulator: roll over on calendar-month change, then add
-    // this tick's SNMP counter delta to monthRx/monthTx. Negative deltas
-    // (counter reset on UDM reboot) are clamped to 0.
+    // Usage accumulators: roll the month over on calendar-month change, then
+    // add this tick's SNMP counter delta to the month and to today's bucket.
+    // Negative deltas (counter reset on UDM reboot) are clamped to 0.
     const monthLabel = currentMonthLabel();
+    const dayLabel = currentDayLabel();
     if (monthly.month !== monthLabel) {
       monthly.month = monthLabel;
       monthly.wans = {};
@@ -486,10 +515,14 @@ export async function startPoller(): Promise<void> {
         const entry = monthly.wans[w.id] ?? { lastRx: 0, lastTx: 0, monthRx: 0, monthTx: 0 };
         const isFirstSeen = entry.lastRx === 0 && entry.lastTx === 0;
         if (!isFirstSeen) {
-          const drx = w.rxTotal - entry.lastRx;
-          const dtx = w.txTotal - entry.lastTx;
-          if (drx > 0) entry.monthRx += drx;
-          if (dtx > 0) entry.monthTx += dtx;
+          const drx = Math.max(0, w.rxTotal - entry.lastRx);
+          const dtx = Math.max(0, w.txTotal - entry.lastTx);
+          entry.monthRx += drx;
+          entry.monthTx += dtx;
+          const days = (monthly.days[w.id] ??= {});
+          const day = (days[dayLabel] ??= { rx: 0, tx: 0 });
+          day.rx += drx;
+          day.tx += dtx;
         }
         entry.lastRx = w.rxTotal;
         entry.lastTx = w.txTotal;
@@ -498,45 +531,68 @@ export async function startPoller(): Promise<void> {
       }
     }
     if (monthlyDirty && now - monthlySavedAt >= MONTHLY_WRITE_INTERVAL_MS) {
+      usageDailyOut = usageDailyFrom(monthly);
       saveMonthlyState(monthly);
       monthlySavedAt = now;
       monthlyDirty = false;
     }
 
-    // /stat/health returns one entry per WAN (`wan`, `wan2`) plus a
-    // `www` aggregate. Per-WAN latency lives in the bucket keyed by
-    // WAN/WAN2 in `uptime_stats` (handled in unifi.ts → toHealthSubsystem).
-    // Status comes from the wan-named subsystem; latency falls back to
-    // the www entry when the wan-bucket isn't populated (fresh uplink).
+    // /stat/health returns one entry per WAN (`wan`, `wan2`) plus a `www`
+    // aggregate. Per-WAN latency lives in the bucket keyed by WAN/WAN2 in
+    // `uptime_stats` (handled in unifi.ts → toHealthSubsystem). With a single
+    // WAN the controller may still only emit `wan`, so fall back to the first
+    // entry then; with several WANs never cross-wire them.
     const wwwHealth = lastHealth.find((h) => h.name === 'www');
     const wanByOrder = lastHealth.filter((h) => h.name.startsWith('wan'));
     const detailsByIf = new Map(lastWanDetails.map((d) => [d.ifName, d]));
     const wanOut: Wan[] = wans.map((w, i) => {
       const det = detailsByIf.get(w.ifName) ?? null;
-      const h = wanByOrder[i] ?? wanByOrder[0] ?? null;
+      const h = wanByOrder[i] ?? (wans.length === 1 ? wanByOrder[0] : undefined) ?? null;
       const monthEntry = monthly.wans[w.id];
+      const dayEntry = monthly.days[w.id]?.[dayLabel];
+      const envSpeedMbps = config.snmp.wanSpeedsMbps[i] ?? 0;
+      const speedBitsPerSec =
+        envSpeedMbps > 0
+          ? envSpeedMbps * 1_000_000
+          : det?.speedMbps
+            ? det.speedMbps * 1_000_000
+            : w.speedBitsPerSec;
+      let status: WanStatus = 'unknown';
+      if (h) status = h.status === 'ok' ? 'ok' : h.status === 'warning' ? 'degraded' : 'down';
+      else if (det) status = det.up ? 'ok' : 'down';
       return {
         id: w.id,
         ifIndex: w.ifIndex,
         ifName: w.ifName,
         label: w.label,
-        speedBitsPerSec: w.speedBitsPerSec,
+        speedBitsPerSec,
         rxBps: w.rxBps,
         txBps: w.txBps,
         rxTotal: w.rxTotal,
         txTotal: w.txTotal,
-        wanIp: det?.ip ?? wanIpsByIfName[w.ifName] ?? h?.wanIp ?? null,
+        wanIp: det?.ip ?? h?.wanIp ?? null,
         wanIpv6: det?.ipv6 ?? null,
-        status: h?.status === 'ok' ? 'ok' : h ? 'down' : 'unknown',
-        latencyMs: h?.latencyMs ?? wwwHealth?.latencyMs ?? null,
+        status,
+        latencyMs: h?.latencyMs ?? det?.latencyMs ?? wwwHealth?.latencyMs ?? null,
         monthRxBytes: monthEntry?.monthRx ?? 0,
         monthTxBytes: monthEntry?.monthTx ?? 0,
         monthLabel: monthly.month,
+        dayRxBytes: dayEntry?.rx ?? 0,
+        dayTxBytes: dayEntry?.tx ?? 0,
+        dayLabel,
+        ispName: h?.ispName ?? null,
+        ispOrg: h?.ispOrg ?? null,
+        asn: h?.asn ?? null,
+        availabilityPct: h?.availabilityPct ?? det?.availabilityPct ?? null,
+        uptimeSec: h?.uptimeSec ?? det?.uptimeSec ?? null,
+        drops: h?.drops ?? null,
+        monitors: h?.monitors ?? [],
       };
     });
 
     store.pushTick({
       wans: wanOut,
+      ...(usageDailyOut ? { usageDaily: usageDailyOut } : {}),
       clients: lastClients.length ? lastClients : undefined,
       dpi: lastDpi.length ? lastDpi : undefined,
       dpiCategories: lastDpiCategories.length ? lastDpiCategories : undefined,
@@ -545,10 +601,62 @@ export async function startPoller(): Promise<void> {
       health: lastHealth.length ? lastHealth : undefined,
       ups: lastUps ?? undefined,
     });
+    usageDailyOut = null;
   };
 
   await tick();
   setInterval(() => {
     void tick();
   }, config.poll.wanMs);
+}
+
+/** Network-level failures (refused, reset, DNS, timeout) and auth failures
+ *  mean the controller itself is gone; a 4xx/5xx on one endpoint doesn't. */
+function isConnectivityError(e: unknown): boolean {
+  const msg = e instanceof Error ? `${e.message} ${(e as { code?: string }).code ?? ''} ${String(e.cause ?? '')}` : String(e);
+  return /ECONNREFUSED|ECONNRESET|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|UND_ERR|fetch failed|login failed|TOKEN cookie/i.test(msg);
+}
+
+/** Mock mode: synthesize the whole fleet. The world is a pure function of
+ *  time, so the last 15 minutes are replayed at startup to pre-fill every
+ *  history (the kiosk never shows empty charts, even on a laptop). */
+async function startMockPoller(): Promise<void> {
+  console.log('[poller] running in MOCK mode');
+  const world = createMockWorld();
+  store.setSource('mock');
+  store.setFeatures({ dpiAvailable: true, perClientRates: true, snmpAvailable: true, upsAvailable: true, controllerAvailable: true });
+  world.seedEvents((e) => store.recordEvent(e));
+
+  const { apps, categories } = world.dpi();
+  let slowAt = 0;
+  let clientsAt = 0;
+  let usageAt = 0;
+  const run = (t: number): void => {
+    const wans = world.wans(t);
+    const slow = t - slowAt >= config.poll.udmInfoMs;
+    const clientsDue = t - clientsAt >= config.poll.clientsMs;
+    const usageDue = t - usageAt >= MONTHLY_WRITE_INTERVAL_MS;
+    if (slow) slowAt = t;
+    if (clientsDue) clientsAt = t;
+    if (usageDue) usageAt = t;
+    store.pushTick(
+      {
+        wans,
+        ...(usageDue ? { usageDaily: world.usageDaily(t) } : {}),
+        ...(clientsDue ? { clients: world.clients(t), dpi: apps, dpiCategories: categories } : {}),
+        ...(slow ? { devices: world.devices(t), udm: world.udm(t), health: world.health(wans, t), ups: world.ups(t) } : {}),
+      },
+      t,
+    );
+  };
+
+  const now = Date.now();
+  const span = config.history.maxSamples * config.poll.wanMs;
+  const backfillStart = now - span;
+  // Clients first so the gateway history has client counts from the start.
+  clientsAt = backfillStart - config.poll.clientsMs;
+  for (let t = backfillStart; t < now; t += config.poll.wanMs) run(t);
+  console.log(`[poller] mock history backfilled (${Math.round(span / 60_000)} min)`);
+  run(now);
+  setInterval(() => run(Date.now()), config.poll.wanMs);
 }

@@ -2,6 +2,8 @@ node_modules/
 dist/
 build/
 .svelte-kit/
+# Runtime state written by the server (monthly usage, event log).
+data/
 .env
 .env.local
 .DS_Store

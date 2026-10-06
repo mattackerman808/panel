@@ -1,5 +1,7 @@
 import { Agent, fetch as undiciFetch } from 'undici';
+import { modelName } from './catalog.js';
 import type {
+  Band,
   ClientStat,
   DpiCategory,
   HealthSubsystem,
@@ -12,19 +14,11 @@ import type {
 
 type Mode = 'legacy' | 'integration' | 'none';
 
-type RawHealth = {
-  subsystem?: string;
-  status?: string;
-  wan_ip?: string;
-  'rx_bytes-r'?: number;
-  'tx_bytes-r'?: number;
-  rx_bytes?: number;
-  tx_bytes?: number;
-  uptime?: number;
-  latency?: number;
-  xput_up?: number;
-  xput_down?: number;
-};
+// ---------------------------------------------------------------------------
+// Raw payload shapes. Only the fields we read are declared. The v2 and legacy
+// endpoints overlap heavily (same key names), so one shape serves both and
+// the mappers read "whichever endpoint supplied it".
+// ---------------------------------------------------------------------------
 
 type RawHealthMonitor = {
   target?: string;
@@ -62,75 +56,56 @@ type RawHealthSubsystem = {
   num_guest?: number;
 };
 
-function toProbe(m: RawHealthMonitor): HealthSubsystem['monitors'][number] {
-  return {
-    target: m.target ?? '',
-    type: m.type ?? 'unknown',
-    latencyMs: typeof m.latency_average === 'number' ? m.latency_average : null,
-    availabilityPct: typeof m.availability === 'number' ? m.availability : null,
-  };
-}
-
-function toHealthSubsystem(h: RawHealthSubsystem): HealthSubsystem {
-  const status: HealthSubsystem['status'] =
-    h.status === 'ok' ? 'ok' : h.status === 'warning' ? 'warning' : 'unknown';
-  // The wan/wan2 entries don't carry a top-level `latency`; instead the
-  // current avg lives in `uptime_stats.{WAN,WAN2}.latency_average`. Pick
-  // the bucket whose key matches this subsystem (case-insensitive).
-  const bucket = (() => {
-    const stats = h.uptime_stats;
-    if (!stats) return null;
-    const want = (h.subsystem ?? '').toUpperCase();
-    return stats[want] ?? Object.values(stats)[0] ?? null;
-  })();
-  const monitors = [...(bucket?.alerting_monitors ?? []), ...(bucket?.monitors ?? [])].map(toProbe);
-  const latencyFromBucket =
-    typeof bucket?.latency_average === 'number' ? bucket.latency_average : null;
-  return {
-    name: h.subsystem ?? 'unknown',
-    status,
-    latencyMs:
-      typeof h.latency === 'number' ? h.latency : latencyFromBucket,
-    drops: typeof h.drops === 'number' ? h.drops : null,
-    uptimeSec: typeof h.uptime === 'number' ? h.uptime : null,
-    xputDownMbps: typeof h.xput_down === 'number' ? h.xput_down : null,
-    xputUpMbps: typeof h.xput_up === 'number' ? h.xput_up : null,
-    speedtestLastRunTs: typeof h.speedtest_lastrun === 'number' ? h.speedtest_lastrun : null,
-    speedtestStatus: h.speedtest_status ?? null,
-    numUser: typeof h.num_user === 'number' ? h.num_user : null,
-    numGuest: typeof h.num_guest === 'number' ? h.num_guest : null,
-    wanIp: h.wan_ip ?? null,
-    availabilityPct:
-      typeof bucket?.availability === 'number' ? bucket.availability : null,
-    monitors,
-    ispName: h.isp_name ?? null,
-    ispOrg: h.isp_organization ?? null,
-    asn: typeof h.asn === 'number' ? h.asn : null,
-  };
-}
+type RawFingerprint = {
+  computed_dev_id?: number;
+  dev_id?: number;
+  dev_id_override?: number;
+  has_override?: boolean;
+};
 
 type RawClient = {
+  _id?: string;
   id?: string;
   user_id?: string;
   mac?: string;
   ip?: string;
   hostname?: string;
+  name?: string;
   display_name?: string;
   oui?: string;
   is_wired?: boolean;
+  is_guest?: boolean;
+  /** Some v2 responses carry `WIRED` / `WIRELESS` here instead of is_wired. */
+  type?: string;
   signal?: number;
+  rssi?: number;
   rx_bytes?: number;
   tx_bytes?: number;
   'rx_bytes-r'?: number;
   'tx_bytes-r'?: number;
   first_seen?: number;
   last_seen?: number;
-  fingerprint?: {
-    computed_dev_id?: number;
-    dev_id?: number;
-    dev_id_override?: number;
-    has_override?: boolean;
-  };
+  uptime?: number;
+  fingerprint?: RawFingerprint;
+  dev_id?: number;
+  dev_id_override?: number;
+  // association (legacy /stat/sta and, on newer firmware, v2 too)
+  ap_mac?: string;
+  sw_mac?: string;
+  sw_port?: number;
+  uplink_mac?: string;
+  uplink_remote_port?: number | string;
+  radio?: string;
+  radio_proto?: string;
+  channel?: number;
+  essid?: string;
+  network?: string;
+  network_name?: string;
+  satisfaction?: number;
+  /** PHY rates in Kbps. */
+  rx_rate?: number;
+  tx_rate?: number;
+  wired_rate_mbps?: number;
 };
 
 type RawTrafficApp = {
@@ -158,6 +133,7 @@ type RawGatewayWan = {
   enable?: boolean;
   up?: boolean;
   is_uplink?: boolean;
+  /** Negotiated speed / port max, in Mbps. */
   speed?: number;
   max_speed?: number;
   media?: string;
@@ -165,19 +141,124 @@ type RawGatewayWan = {
   tx_bytes?: number;
   latency?: number;
   availability?: number;
+  uptime?: number;
 };
 
+type RawLldpEntry = {
+  local_port_idx?: number;
+  chassis_id?: string;
+  port_id?: string;
+  system_name?: string;
+};
+
+type RawPort = {
+  port_idx?: number;
+  name?: string;
+  up?: boolean;
+  speed?: number;
+  is_uplink?: boolean;
+  enable?: boolean;
+  poe_enable?: boolean;
+  port_poe?: boolean;
+  poe_power?: string | number;
+  poe_mode?: string;
+  rx_bytes?: number;
+  tx_bytes?: number;
+  'rx_bytes-r'?: number;
+  'tx_bytes-r'?: number;
+  rx_errors?: number;
+  tx_errors?: number;
+  rx_dropped?: number;
+  tx_dropped?: number;
+  full_duplex?: boolean;
+  media?: string;
+  stp_state?: string;
+  satisfaction?: number;
+  // LLDP. UniFi has used both flat fields and a nested table across
+  // firmware versions; we read whichever is present.
+  lldp_chassis_id?: string;
+  lldp_port_id?: string;
+  lldp_system_name?: string;
+  lldp_table?: Array<{ chassis_id?: string; port_id?: string; system_name?: string }>;
+};
+
+type RawRadioStats = {
+  name?: string;
+  radio?: string;
+  channel?: number;
+  bw?: number;
+  num_sta?: number;
+  'user-num_sta'?: number;
+  'guest-num_sta'?: number;
+  cu_total?: number;
+  cu_self_rx?: number;
+  cu_self_tx?: number;
+  satisfaction?: number;
+  tx_retries?: number;
+  tx_packets?: number;
+  tx_power?: number;
+};
+
+type RawRadio = {
+  name?: string;
+  radio?: string;
+  channel?: number | string;
+  ht?: number | string;
+  tx_power?: number;
+};
+
+type RawVap = {
+  radio?: string;
+  radio_name?: string;
+  essid?: string;
+  num_sta?: number;
+  is_guest?: boolean;
+  up?: boolean;
+  channel?: number;
+};
+
+/** A device entry from either `/v2/api/site/{site}/device` or the legacy
+ *  `/api/s/{site}/stat/device`. The two carry different subsets (the v2
+ *  endpoint omits per-port PoE wattage and LLDP on some firmwares; the
+ *  legacy one has everything but older naming), so both are fetched and
+ *  merged by mac. */
 type RawDevice = {
   _id?: string;
+  mac?: string;
+  type?: string;
+  model?: string;
   name?: string;
   hostname?: string;
-  model?: string;
-  type?: string;
-  is_gateway?: boolean;
+  ip?: string;
   version?: string;
+  upgradable?: boolean;
+  state?: number;
   uptime?: number;
+  last_seen?: number;
+  num_sta?: number;
+  satisfaction?: number;
+  'bytes-r'?: number;
+  rx_bytes?: number;
+  tx_bytes?: number;
   'system-stats'?: { cpu?: string; mem?: string; uptime?: string };
+  general_temperature?: number;
   temperatures?: Array<{ value?: number; name?: string; type?: string }>;
+  overheating?: boolean;
+  fan_level?: number;
+  total_max_power?: number;
+  port_table?: RawPort[];
+  lldp_table?: RawLldpEntry[];
+  uplink?: {
+    uplink_mac?: string;
+    uplink_remote_port?: number | string;
+    uplink_device_name?: string;
+    type?: string;
+    speed?: number;
+  };
+  vap_table?: RawVap[];
+  radio_table?: RawRadio[];
+  radio_table_stats?: RawRadioStats[];
+  is_gateway?: boolean;
   /** UDM gateway WAN ports — keys are `wan1` and `wan2`. */
   wan1?: RawGatewayWan;
   wan2?: RawGatewayWan;
@@ -198,78 +279,9 @@ export type GatewayWanDetails = {
   latencyMs: number | null;
   availabilityPct: number | null;
   up: boolean;
-};
-
-type RawV2Device = RawDevice & {
-  ip?: string;
-  mac?: string;
-  state?: number;
-  num_sta?: number;
-  satisfaction?: number;
-  'bytes-r'?: number;
-  rx_bytes?: number;
-  tx_bytes?: number;
-  general_temperature?: number;
-  port_table?: Array<{
-    port_idx?: number;
-    name?: string;
-    up?: boolean;
-    speed?: number;
-    is_uplink?: boolean;
-    enable?: boolean;
-    poe_enable?: boolean;
-    port_poe?: boolean;
-    rx_bytes?: number;
-    tx_bytes?: number;
-    'rx_bytes-r'?: number;
-    'tx_bytes-r'?: number;
-    poe_power?: string;
-    // LLDP. UniFi has used both flat fields and a nested table across
-    // firmware versions; we read whichever is present.
-    lldp_chassis_id?: string;
-    lldp_port_id?: string;
-    lldp_system_name?: string;
-    lldp_table?: Array<{
-      chassis_id?: string;
-      port_id?: string;
-      system_name?: string;
-    }>;
-  }>;
-  // Device-level LLDP table (some firmwares put it here keyed by local
-  // port index instead of inline in port_table).
-  lldp_table?: Array<{
-    local_port_idx?: number;
-    chassis_id?: string;
-    port_id?: string;
-    system_name?: string;
-  }>;
-  // APs report their upstream switch here rather than via per-port LLDP.
-  uplink?: {
-    uplink_mac?: string;
-    uplink_remote_port?: number | string;
-    uplink_device_name?: string;
-    type?: string;
-  };
-  radio_table_stats?: Array<{
-    name?: string;
-    radio?: string;
-    channel?: number;
-    bw?: number;
-    'num_sta'?: number;
-    'user-num_sta'?: number;
-    cu_total?: number;
-    satisfaction?: number;
-    tx_retries?: number;
-    tx_packets?: number;
-  }>;
-};
-
-const MODEL_NAMES: Record<string, string> = {
-  UDMPROMAX: 'UDM Pro Max',
-  UDMPRO: 'UDM Pro',
-  UDMSE: 'UDM SE',
-  UDMR: 'UDM R',
-  UDM: 'UDM',
+  /** Negotiated port speed in Mbps, when the controller reports it. */
+  speedMbps: number | null;
+  uptimeSec: number | null;
 };
 
 const DPI_CATEGORIES: Record<number, string> = {
@@ -305,6 +317,11 @@ function dpiCatName(id: number): string {
   return DPI_CATEGORIES[id] ?? `Category ${id}`;
 }
 
+/** The legacy device list is consumed by three pollers (devices, gateway
+ *  info, WAN details) that fire on the same cadence; cache it briefly so one
+ *  cycle costs one request. */
+const LEGACY_DEVICES_TTL_MS = 5_000;
+
 export type UnifiOpts = {
   host: string;
   apiKey?: string;
@@ -328,6 +345,8 @@ export class UnifiClient {
   /** Device fingerprint id → device name (e.g. 2900 → "Apple TV"). Loaded
    *  from /v2/api/fingerprint_devices/0 once at connect. */
   private deviceCatalog: Map<number, string> = new Map();
+  private legacyDevicesCache: { at: number; promise: Promise<RawDevice[]> } | null = null;
+  private warnedLegacyClients = false;
 
   constructor(private opts: UnifiOpts) {
     this.agent = new Agent({
@@ -353,9 +372,7 @@ export class UnifiClient {
         const { apps, categories } = await this.fetchDpiCatalogs();
         this.appCatalog = apps;
         this.categoryCatalog = categories;
-        console.log(
-          `[unifi] DPI catalog loaded: ${apps.size} apps, ${categories.size} categories`,
-        );
+        console.log(`[unifi] DPI catalog loaded: ${apps.size} apps, ${categories.size} categories`);
       } catch (err) {
         console.error('[unifi] DPI catalog fetch failed:', err);
       }
@@ -415,30 +432,58 @@ export class UnifiClient {
     return map;
   }
 
-  private toClient(c: RawClient): ClientStat {
-    const id = c.id ?? c.user_id ?? c.mac ?? '';
-    const fp = c.fingerprint;
+  /** Build a ClientStat from the v2 entry, backfilling association fields
+   *  (AP / switch port / radio / SSID / network) from the legacy `/stat/sta`
+   *  entry for the same mac when v2 doesn't carry them. */
+  private toClient(primary: RawClient, secondary: RawClient | null): ClientStat {
+    const first = <K extends keyof RawClient>(k: K): RawClient[K] | undefined => primary[k] ?? secondary?.[k];
+    const id = primary.id ?? primary._id ?? primary.user_id ?? primary.mac ?? secondary?._id ?? '';
+    const fp = primary.fingerprint ?? secondary?.fingerprint;
     // Override beats the auto-computed id (lets users rename in UDM UI).
     const devId = fp?.has_override
       ? (fp.dev_id_override ?? fp.dev_id)
-      : (fp?.computed_dev_id ?? fp?.dev_id);
+      : (fp?.computed_dev_id ?? fp?.dev_id ?? first('dev_id_override') ?? first('dev_id'));
     const device = devId ? (this.deviceCatalog.get(devId) ?? null) : null;
-    const vendor = c.oui && c.oui.length > 0 ? c.oui : null;
+    const oui = first('oui');
+    const vendor = oui && oui.length > 0 ? oui : null;
+    const isWiredRaw = first('is_wired');
+    const type = first('type');
+    const isWired = typeof isWiredRaw === 'boolean' ? isWiredRaw : type === 'WIRED';
+    const radio = first('radio');
+    const channel = num(first('channel'));
+    const band: Band | null = isWired ? null : bandFromRadio(radio, channel ?? 0);
+    const uplinkMac = normalizeMac(isWired ? (first('sw_mac') ?? first('uplink_mac')) : (first('ap_mac') ?? first('uplink_mac'))) || null;
+    const swPortRaw = first('sw_port') ?? first('uplink_remote_port');
+    const swPort = isWired ? num(swPortRaw) : null;
+    const wiredRate = num(first('wired_rate_mbps'));
+    const rxRateMbps = wiredRate ?? scaleRate(num(first('rx_rate')));
+    const txRateMbps = wiredRate ?? scaleRate(num(first('tx_rate')));
     return {
       id,
-      name: c.display_name ?? c.hostname ?? c.mac ?? id,
-      ip: c.ip ?? null,
-      mac: c.mac ?? '',
-      rxBps: c['rx_bytes-r'] ?? 0,
-      txBps: c['tx_bytes-r'] ?? 0,
-      rxBytes: c.rx_bytes ?? 0,
-      txBytes: c.tx_bytes ?? 0,
-      isWired: c.is_wired === true,
-      signal: c.signal ?? null,
+      name: primary.display_name ?? primary.name ?? primary.hostname ?? secondary?.name ?? secondary?.hostname ?? primary.mac ?? id,
+      ip: first('ip') ?? null,
+      mac: normalizeMac(first('mac')),
+      rxBps: first('rx_bytes-r') ?? 0,
+      txBps: first('tx_bytes-r') ?? 0,
+      rxBytes: first('rx_bytes') ?? 0,
+      txBytes: first('tx_bytes') ?? 0,
+      isWired,
+      isGuest: first('is_guest') === true,
+      signal: isWired ? null : (num(first('signal')) ?? num(first('rssi')) ?? null),
       vendor,
       device,
-      firstSeen: c.first_seen ?? null,
-      lastSeen: c.last_seen ?? null,
+      firstSeen: first('first_seen') ?? null,
+      lastSeen: first('last_seen') ?? null,
+      network: first('network_name') ?? first('network') ?? null,
+      uplinkMac,
+      swPort,
+      band,
+      channel: isWired ? null : channel,
+      essid: isWired ? null : (first('essid') ?? null),
+      rxRateMbps,
+      txRateMbps,
+      satisfaction: num(first('satisfaction')),
+      uptimeSec: num(first('uptime')),
     };
   }
 
@@ -518,15 +563,50 @@ export class UnifiClient {
     return (await res.json()) as T;
   }
 
+  /** Legacy `/stat/device`, shared across the per-cycle pollers. */
+  private legacyDevices(): Promise<RawDevice[]> {
+    const now = Date.now();
+    if (this.legacyDevicesCache && now - this.legacyDevicesCache.at < LEGACY_DEVICES_TTL_MS) {
+      return this.legacyDevicesCache.promise;
+    }
+    const promise = this.legacyGet<{ data?: RawDevice[] }>(`/api/s/${this.opts.site}/stat/device`).then(
+      (r) => r.data ?? [],
+    );
+    this.legacyDevicesCache = { at: now, promise };
+    promise.catch(() => {
+      this.legacyDevicesCache = null;
+    });
+    return promise;
+  }
+
   async getClients(): Promise<ClientStat[]> {
     if (this.mode === 'legacy') {
-      // The v2 endpoint returns much richer client info: a UI-formatted
-      // display_name, vendor (oui), and a fingerprint object with the
-      // computed device id we look up against the fingerprint catalog.
-      const r = await this.legacyGet<RawClient[]>(
-        `/v2/api/site/${this.opts.site}/clients/active?includeTrafficUsage=true&includeUnifiDevices=false`,
-      );
-      return (r ?? []).map((c) => this.toClient(c));
+      // The v2 endpoint returns the richer identity info (UI display name,
+      // vendor, fingerprint); the legacy one carries the association fields
+      // (AP / switch port / radio / SSID). Fetch both and merge by mac; if
+      // one fails, fall back to the other alone.
+      const [v2Res, legacyRes] = await Promise.allSettled([
+        this.legacyGet<RawClient[]>(
+          `/v2/api/site/${this.opts.site}/clients/active?includeTrafficUsage=true&includeUnifiDevices=false`,
+        ),
+        this.legacyGet<{ data?: RawClient[] }>(`/api/s/${this.opts.site}/stat/sta`),
+      ]);
+      const v2 = v2Res.status === 'fulfilled' && Array.isArray(v2Res.value) ? v2Res.value : null;
+      const legacy = legacyRes.status === 'fulfilled' ? (legacyRes.value.data ?? []) : null;
+      if (legacyRes.status === 'rejected' && !this.warnedLegacyClients) {
+        this.warnedLegacyClients = true;
+        console.error('[unifi] legacy /stat/sta failed (client↔AP association unavailable):', legacyRes.reason);
+      }
+      if (!v2 && !legacy) {
+        throw v2Res.status === 'rejected' ? v2Res.reason : new Error('no client data');
+      }
+      const legacyByMac = new Map<string, RawClient>();
+      for (const c of legacy ?? []) {
+        const mac = normalizeMac(c.mac);
+        if (mac) legacyByMac.set(mac, c);
+      }
+      if (v2) return v2.map((c) => this.toClient(c, legacyByMac.get(normalizeMac(c.mac)) ?? null));
+      return (legacy ?? []).map((c) => this.toClient(c, null));
     }
     if (this.mode === 'integration') {
       const sites = await this.integrationGet<{ data: Array<{ id: string }> }>(
@@ -548,17 +628,28 @@ export class UnifiClient {
         id: c.id,
         name: c.name ?? c.macAddress ?? c.id,
         ip: c.ipAddress ?? null,
-        mac: c.macAddress ?? '',
+        mac: normalizeMac(c.macAddress),
         rxBps: 0,
         txBps: 0,
         rxBytes: 0,
         txBytes: 0,
         isWired: c.type === 'WIRED',
+        isGuest: false,
         signal: null,
         vendor: null,
         device: null,
         firstSeen: c.connectedAt ? Math.floor(new Date(c.connectedAt).getTime() / 1000) : null,
         lastSeen: null,
+        network: null,
+        uplinkMac: null,
+        swPort: null,
+        band: null,
+        channel: null,
+        essid: null,
+        rxRateMbps: null,
+        txRateMbps: null,
+        satisfaction: null,
+        uptimeSec: null,
       }));
     }
     return [];
@@ -615,53 +706,28 @@ export class UnifiClient {
   async getDevices(): Promise<NetworkDevice[]> {
     if (this.mode !== 'legacy') return [];
     // The v2 device endpoint doesn't include poe_power on some firmwares,
-    // and on the cn10k gateway it also returns empty LLDP (no port-level
-    // lldp_* fields and an empty device.lldp_table). Both the per-port
-    // wattage and the device-level LLDP table live on the legacy
-    // /stat/device endpoint, so we fetch both and merge by device mac.
-    const [v2, legacy] = await Promise.all([
-      this.legacyGet<{ network_devices?: RawV2Device[] }>(
+    // and on the cn10k gateway it also returns empty LLDP. Per-port wattage,
+    // port error counters, the LLDP table, PoE budget and the VAP table all
+    // live on the legacy /stat/device endpoint, so we fetch both and merge
+    // by device mac. Either side alone is enough to render the fleet.
+    const [v2Res, legacyRes] = await Promise.allSettled([
+      this.legacyGet<{ network_devices?: RawDevice[] }>(
         `/v2/api/site/${this.opts.site}/device?separateUnmanaged=true&includeTrafficUsage=true`,
       ),
-      this.legacyGet<{
-        data?: Array<{
-          mac?: string;
-          port_table?: Array<{ port_idx?: number; poe_power?: string }>;
-          lldp_table?: Array<{
-            local_port_idx?: number;
-            chassis_id?: string;
-            port_id?: string;
-            system_name?: string;
-          }>;
-        }>;
-      }>(`/api/s/${this.opts.site}/stat/device`).catch((e) => {
-        console.error('[unifi] legacy device fetch failed:', e);
-        return { data: [] as never[] };
-      }),
+      this.legacyDevices(),
     ]);
-    const poeByMac = new Map<string, Map<number, number>>();
-    const lldpByMac = new Map<string, RawV2Device['lldp_table']>();
-    for (const d of legacy.data ?? []) {
-      const mac = (d.mac ?? '').toLowerCase();
-      if (!mac) continue;
-      const ports = new Map<number, number>();
-      for (const p of d.port_table ?? []) {
-        const w = Number.parseFloat(String(p.poe_power ?? '0'));
-        if (Number.isFinite(w) && w > 0 && p.port_idx != null) {
-          ports.set(p.port_idx, w);
-        }
-      }
-      if (ports.size > 0) poeByMac.set(mac, ports);
-      if (d.lldp_table && d.lldp_table.length > 0) lldpByMac.set(mac, d.lldp_table);
+    const v2 = v2Res.status === 'fulfilled' ? (v2Res.value.network_devices ?? []) : null;
+    const legacy = legacyRes.status === 'fulfilled' ? legacyRes.value : null;
+    if (v2Res.status === 'rejected') console.error('[unifi] v2 device fetch failed:', v2Res.reason);
+    if (legacyRes.status === 'rejected') console.error('[unifi] legacy device fetch failed:', legacyRes.reason);
+    if (!v2 && !legacy) throw v2Res.status === 'rejected' ? v2Res.reason : new Error('no device data');
+    const legacyByMac = new Map<string, RawDevice>();
+    for (const d of legacy ?? []) {
+      const mac = normalizeMac(d.mac);
+      if (mac) legacyByMac.set(mac, d);
     }
-    return (v2.network_devices ?? []).map((d) => {
-      const mac = (d.mac ?? '').toLowerCase();
-      return toDevice(
-        d,
-        poeByMac.get(mac) ?? new Map(),
-        lldpByMac.get(mac) ?? null,
-      );
-    });
+    if (v2) return v2.map((d) => toDevice(d, legacyByMac.get(normalizeMac(d.mac)) ?? null));
+    return (legacy ?? []).map((d) => toDevice(d, null));
   }
 
   /** Health subsystems from `/api/s/{site}/stat/health`. UniFi returns
@@ -711,14 +777,7 @@ export class UnifiClient {
    *  when no gateway is reported. */
   async getWanDetails(): Promise<GatewayWanDetails[]> {
     if (this.mode !== 'legacy') return [];
-    const r = await this.legacyGet<{ data: RawDevice[] }>(`/api/s/${this.opts.site}/stat/device`);
-    const gw = (r.data ?? []).find(
-      (d) =>
-        d.is_gateway === true ||
-        d.type === 'ugw' ||
-        (d.model ?? '').startsWith('UDM') ||
-        (d.model ?? '').startsWith('UGW'),
-    );
+    const gw = findGateway(await this.legacyDevices());
     if (!gw) return [];
     const ipv6Global = (gw.ipv6 ?? []).find((a) => !a.startsWith('fe80')) ?? null;
     const out: GatewayWanDetails[] = [];
@@ -726,6 +785,7 @@ export class UnifiClient {
       if (!w) continue;
       const ifName = w.uplink_ifname ?? w.ifname ?? w.name ?? '';
       if (!ifName) continue;
+      const speed = num(w.speed);
       out.push({
         ifName,
         ip: w.ip ?? null,
@@ -736,9 +796,11 @@ export class UnifiClient {
         mac: w.mac ?? null,
         rxBytes: typeof w.rx_bytes === 'number' ? w.rx_bytes : 0,
         txBytes: typeof w.tx_bytes === 'number' ? w.tx_bytes : 0,
-        latencyMs: typeof w.latency === 'number' ? w.latency : null,
-        availabilityPct: typeof w.availability === 'number' ? w.availability : null,
+        latencyMs: num(w.latency),
+        availabilityPct: num(w.availability),
         up: w.up === true,
+        speedMbps: speed !== null && speed > 0 ? speed : null,
+        uptimeSec: num(w.uptime),
       });
     }
     return out;
@@ -748,24 +810,19 @@ export class UnifiClient {
     if (this.mode !== 'legacy') return null;
     // Hardware stats (cpu/mem/temp) live on the gateway *device* entry,
     // not on /stat/sysinfo (which is just controller/Network-app metadata).
-    const r = await this.legacyGet<{ data: RawDevice[] }>(`/api/s/${this.opts.site}/stat/device`);
-    const gw = (r.data ?? []).find(
-      (d) =>
-        d.is_gateway === true ||
-        d.type === 'ugw' ||
-        (d.model ?? '').startsWith('UDM') ||
-        (d.model ?? '').startsWith('UGW'),
-    );
+    const gw = findGateway(await this.legacyDevices());
     if (!gw) return null;
     const stats = gw['system-stats'];
     const cpuTemp =
       gw.temperatures?.find((t) => t.type === 'cpu')?.value ??
       gw.temperatures?.[0]?.value ??
+      gw.general_temperature ??
       null;
     const uptimeFromStats = stats?.uptime ? Number.parseInt(stats.uptime, 10) : NaN;
     return {
       name: gw.name ?? gw.hostname ?? 'UDM',
-      model: MODEL_NAMES[gw.model ?? ''] ?? gw.model ?? 'Gateway',
+      model: gw.model ?? '',
+      modelName: modelName(gw.model),
       firmware: gw.version ?? '',
       uptimeSec: Number.isFinite(uptimeFromStats) ? uptimeFromStats : (gw.uptime ?? 0),
       cpuPct: parsePct(stats?.cpu),
@@ -775,13 +832,91 @@ export class UnifiClient {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Mappers
+// ---------------------------------------------------------------------------
+
+function findGateway(devices: RawDevice[]): RawDevice | undefined {
+  return devices.find(
+    (d) =>
+      d.is_gateway === true ||
+      d.type === 'udm' ||
+      d.type === 'ugw' ||
+      (d.model ?? '').startsWith('UDM') ||
+      (d.model ?? '').startsWith('UGW') ||
+      (d.model ?? '').startsWith('UCG'),
+  );
+}
+
+function toProbe(m: RawHealthMonitor): HealthSubsystem['monitors'][number] {
+  return {
+    target: m.target ?? '',
+    type: m.type ?? 'unknown',
+    latencyMs: typeof m.latency_average === 'number' ? m.latency_average : null,
+    availabilityPct: typeof m.availability === 'number' ? m.availability : null,
+  };
+}
+
+function toHealthSubsystem(h: RawHealthSubsystem): HealthSubsystem {
+  const status: HealthSubsystem['status'] =
+    h.status === 'ok' ? 'ok' : h.status === 'warning' ? 'warning' : 'unknown';
+  // The wan/wan2 entries don't carry a top-level `latency`; instead the
+  // current avg lives in `uptime_stats.{WAN,WAN2}.latency_average`. Pick
+  // the bucket whose key matches this subsystem (case-insensitive).
+  const bucket = (() => {
+    const stats = h.uptime_stats;
+    if (!stats) return null;
+    const want = (h.subsystem ?? '').toUpperCase();
+    return stats[want] ?? Object.values(stats)[0] ?? null;
+  })();
+  const monitors = [...(bucket?.alerting_monitors ?? []), ...(bucket?.monitors ?? [])].map(toProbe);
+  const latencyFromBucket =
+    typeof bucket?.latency_average === 'number' ? bucket.latency_average : null;
+  return {
+    name: h.subsystem ?? 'unknown',
+    status,
+    latencyMs:
+      typeof h.latency === 'number' ? h.latency : latencyFromBucket,
+    drops: typeof h.drops === 'number' ? h.drops : null,
+    uptimeSec: typeof h.uptime === 'number' ? h.uptime : null,
+    xputDownMbps: typeof h.xput_down === 'number' ? h.xput_down : null,
+    xputUpMbps: typeof h.xput_up === 'number' ? h.xput_up : null,
+    speedtestLastRunTs: typeof h.speedtest_lastrun === 'number' ? h.speedtest_lastrun : null,
+    speedtestStatus: h.speedtest_status ?? null,
+    numUser: typeof h.num_user === 'number' ? h.num_user : null,
+    numGuest: typeof h.num_guest === 'number' ? h.num_guest : null,
+    wanIp: h.wan_ip ?? null,
+    availabilityPct:
+      typeof bucket?.availability === 'number' ? bucket.availability : null,
+    monitors,
+    ispName: h.isp_name ?? null,
+    ispOrg: h.isp_organization ?? null,
+    asn: typeof h.asn === 'number' ? h.asn : null,
+  };
+}
+
 function parsePct(v: string | undefined): number {
   if (!v) return 0;
   const n = Number.parseFloat(v);
   return Number.isFinite(n) ? n : 0;
 }
 
-function bandFromRadio(name: string | undefined, channel: number): '2g' | '5g' | '6g' {
+function num(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** UniFi reports wireless PHY rates in Kbps; the UI wants Mbps. */
+function scaleRate(kbps: number | null): number | null {
+  if (kbps === null || kbps <= 0) return null;
+  return Math.round(kbps / 1000);
+}
+
+function bandFromRadio(name: string | undefined, channel: number): Band {
   // UniFi tags radios as 'ng' (2.4G), 'na' (5G), '6e' (6G). Fall back to
   // channel-number heuristic when name is missing.
   if (name === '6e' || name?.startsWith('6')) return '6g';
@@ -796,9 +931,7 @@ function normalizeMac(s: string | undefined | null): string {
   return (s ?? '').trim().toLowerCase();
 }
 
-function neighborFromPort(
-  p: NonNullable<RawV2Device['port_table']>[number],
-): PortNeighbor | null {
+function neighborFromPort(p: RawPort): PortNeighbor | null {
   const flatChassis = normalizeMac(p.lldp_chassis_id);
   if (flatChassis) {
     return {
@@ -821,126 +954,175 @@ function neighborFromPort(
   return null;
 }
 
-function toPort(
-  p: NonNullable<RawV2Device['port_table']>[number],
-  deviceLldp: Map<number, PortNeighbor>,
-  poeByIdx: Map<number, number>,
-): NetworkPort {
-  const idx = p.port_idx ?? 0;
-  // The v2 device endpoint we walk for ports doesn't carry poe_power
-  // on this firmware. We supplement from the legacy /stat/device call
-  // (merged in getDevices), keyed by port index. Fall back to whatever
-  // poe_power happens to be in the v2 payload, in case a future
-  // firmware does include it.
-  const v2Poe = Number.parseFloat(p.poe_power ?? '0');
-  const v2PoeWatts = Number.isFinite(v2Poe) && v2Poe > 0 ? v2Poe : 0;
-  const poeWatts = poeByIdx.get(idx) ?? v2PoeWatts;
-  const neighbor = neighborFromPort(p) ?? deviceLldp.get(idx) ?? null;
+function poeWattsOf(p: RawPort | null | undefined): number {
+  if (!p) return 0;
+  const w = Number.parseFloat(String(p.poe_power ?? '0'));
+  return Number.isFinite(w) && w > 0 ? w : 0;
+}
+
+function toPort(p: RawPort, lp: RawPort | null, deviceLldp: Map<number, PortNeighbor>): NetworkPort {
+  const first = <K extends keyof RawPort>(k: K): RawPort[K] | undefined => p[k] ?? lp?.[k];
+  const idx = p.port_idx ?? lp?.port_idx ?? 0;
+  // Wattage: the legacy payload is authoritative (v2 omits it on current
+  // firmware); fall back to whatever v2 carries.
+  const poeWatts = poeWattsOf(lp) || poeWattsOf(p);
+  const neighbor = neighborFromPort(p) ?? (lp ? neighborFromPort(lp) : null) ?? deviceLldp.get(idx) ?? null;
+  const poeCapable = first('port_poe') === true;
+  const poeEnable = first('poe_enable');
   return {
     idx,
-    name: p.name ?? `Port ${idx}`,
-    up: p.up === true,
-    speedMbps: p.speed ?? 0,
-    isUplink: p.is_uplink === true,
+    name: first('name') ?? `Port ${idx}`,
+    up: first('up') === true,
+    speedMbps: num(first('speed')) ?? 0,
+    isUplink: first('is_uplink') === true,
     poeWatts,
-    rxBps: p['rx_bytes-r'] ?? 0,
-    txBps: p['tx_bytes-r'] ?? 0,
+    poeEnabled: poeCapable && poeEnable !== false,
+    rxBps: num(first('rx_bytes-r')) ?? 0,
+    txBps: num(first('tx_bytes-r')) ?? 0,
+    rxBytes: num(first('rx_bytes')) ?? 0,
+    txBytes: num(first('tx_bytes')) ?? 0,
+    rxErrors: num(first('rx_errors')) ?? 0,
+    txErrors: num(first('tx_errors')) ?? 0,
+    rxDropped: num(first('rx_dropped')) ?? 0,
+    txDropped: num(first('tx_dropped')) ?? 0,
+    media: first('media') ?? null,
+    fullDuplex: first('full_duplex') !== false,
+    stpState: first('stp_state') ?? null,
     neighbor,
   };
 }
 
-function toRadio(r: NonNullable<RawV2Device['radio_table_stats']>[number]): NetworkRadio {
+function toRadio(r: RawRadioStats, lr: RawRadioStats | null, vapClients: { total: number; guest: number } | null): NetworkRadio {
+  const first = <K extends keyof RawRadioStats>(k: K): RawRadioStats[K] | undefined => r[k] ?? lr?.[k];
+  const channel = num(first('channel')) ?? 0;
+  // Client counts: v2's radio stats report 0 on some firmwares; the legacy
+  // stats or the VAP table (per-SSID counts, summed per radio) fill in.
+  const counted = [r['user-num_sta'], r.num_sta, lr?.['user-num_sta'], lr?.num_sta].find((v) => typeof v === 'number' && v > 0);
+  const numClients = counted ?? vapClients?.total ?? r.num_sta ?? lr?.num_sta ?? 0;
+  const guest = first('guest-num_sta') ?? vapClients?.guest ?? 0;
   return {
-    name: r.name ?? r.radio ?? '',
-    band: bandFromRadio(r.radio, r.channel ?? 0),
-    channel: r.channel ?? 0,
-    bwMhz: r.bw ?? 0,
-    numClients: r['user-num_sta'] ?? r.num_sta ?? 0,
-    utilizationPct: r.cu_total ?? 0,
-    satisfaction: r.satisfaction ?? 0,
-    txRetries: r.tx_retries ?? 0,
-    txPackets: r.tx_packets ?? 0,
+    name: first('name') ?? first('radio') ?? '',
+    band: bandFromRadio(first('radio'), channel),
+    channel,
+    bwMhz: num(first('bw')) ?? 0,
+    numClients,
+    guestClients: guest,
+    utilizationPct: num(first('cu_total')) ?? 0,
+    cuSelfRx: num(first('cu_self_rx')),
+    cuSelfTx: num(first('cu_self_tx')),
+    satisfaction: num(first('satisfaction')) ?? 0,
+    txRetries: num(first('tx_retries')) ?? 0,
+    txPackets: num(first('tx_packets')) ?? 0,
+    txPowerDbm: num(first('tx_power')),
   };
 }
 
-function toDevice(
-  d: RawV2Device,
-  poeByIdx: Map<number, number>,
-  legacyLldp: RawV2Device['lldp_table'] | null,
-): NetworkDevice {
-  const stats = d['system-stats'];
-  const type = (['uap', 'usw', 'udm', 'uci'] as const).includes(d.type as never)
-    ? (d.type as NetworkDevice['type'])
-    : 'other';
+/** Merge a v2 device entry with its legacy twin (either may be null). */
+function toDevice(d: RawDevice | null, l: RawDevice | null): NetworkDevice {
+  const v = d ?? l ?? {};
+  const first = <K extends keyof RawDevice>(k: K): RawDevice[K] | undefined => d?.[k] ?? l?.[k];
+  const stats = first('system-stats');
+  const rawType = first('type');
+  const type = (['uap', 'usw', 'udm', 'uci'] as const).includes(rawType as never)
+    ? (rawType as NetworkDevice['type'])
+    : rawType === 'ugw'
+      ? 'udm'
+      : 'other';
+
+  // Device-level LLDP: v2 entries win when both endpoints supply data for the
+  // same port; the legacy payload backfills ports where v2 is empty (the
+  // common case on the cn10k gateway, where v2 returns no LLDP at all).
   const deviceLldp = new Map<number, PortNeighbor>();
-  // v2 entries win when both endpoints supply data for the same port; the
-  // legacy /stat/device payload backfills ports where v2 is empty (this is
-  // the common case on the cn10k gateway, where v2 returns no LLDP at all).
-  for (const e of d.lldp_table ?? []) {
+  for (const e of [...(d?.lldp_table ?? []), ...(l?.lldp_table ?? [])]) {
     const idx = e.local_port_idx;
     const chassis = normalizeMac(e.chassis_id);
-    if (typeof idx === 'number' && chassis) {
-      deviceLldp.set(idx, {
-        chassisId: chassis,
-        portId: e.port_id ?? null,
-        systemName: e.system_name ?? null,
-      });
-    }
+    if (typeof idx !== 'number' || !chassis || deviceLldp.has(idx)) continue;
+    deviceLldp.set(idx, { chassisId: chassis, portId: e.port_id ?? null, systemName: e.system_name ?? null });
   }
-  for (const e of legacyLldp ?? []) {
-    const idx = e.local_port_idx;
-    const chassis = normalizeMac(e.chassis_id);
-    if (typeof idx !== 'number' || !chassis) continue;
-    if (deviceLldp.has(idx)) continue;
-    deviceLldp.set(idx, {
-      chassisId: chassis,
-      portId: e.port_id ?? null,
-      systemName: e.system_name ?? null,
-    });
+
+  const legacyPorts = new Map<number, RawPort>();
+  for (const p of l?.port_table ?? []) if (p.port_idx != null) legacyPorts.set(p.port_idx, p);
+  const portSource = d?.port_table && d.port_table.length > 0 ? d.port_table : (l?.port_table ?? []);
+  const ports = portSource.map((p) => toPort(p, legacyPorts.get(p.port_idx ?? -1) ?? null, deviceLldp));
+
+  // Radios: merge v2 and legacy stats by radio code, and sum VAP client
+  // counts per radio as a last resort for client numbers.
+  const vapByRadio = new Map<string, { total: number; guest: number }>();
+  for (const vap of [...(l?.vap_table ?? []), ...(d?.vap_table ?? [])]) {
+    const key = vap.radio ?? vap.radio_name ?? '';
+    if (!key) continue;
+    const cur = vapByRadio.get(key) ?? { total: 0, guest: 0 };
+    // The same VAP may appear in both payloads; keep the max rather than
+    // double-counting.
+    const n = vap.num_sta ?? 0;
+    cur.total = Math.max(cur.total, n);
+    if (vap.is_guest) cur.guest = Math.max(cur.guest, n);
+    vapByRadio.set(key, cur);
   }
-  const ports = (d.port_table ?? []).map((p) => toPort(p, deviceLldp, poeByIdx));
-  const uplinkMac = normalizeMac(d.uplink?.uplink_mac);
+  const legacyRadios = l?.radio_table_stats ?? [];
+  const radioSource = d?.radio_table_stats && d.radio_table_stats.length > 0 ? d.radio_table_stats : legacyRadios;
+  const radios = radioSource.map((r) => {
+    const twin = legacyRadios.find((x) => (x.radio && x.radio === r.radio) || (x.name && x.name === r.name)) ?? null;
+    const vap = vapByRadio.get(r.radio ?? '') ?? vapByRadio.get(r.name ?? '') ?? null;
+    return toRadio(r, twin === r ? null : twin, vap);
+  });
+
+  const uplinkRaw = first('uplink');
+  const uplinkMac = normalizeMac(uplinkRaw?.uplink_mac);
   const uplink: PortNeighbor | null = uplinkMac
     ? {
         chassisId: uplinkMac,
-        portId:
-          d.uplink?.uplink_remote_port != null
-            ? String(d.uplink.uplink_remote_port)
-            : null,
-        systemName: d.uplink?.uplink_device_name ?? null,
+        portId: uplinkRaw?.uplink_remote_port != null ? String(uplinkRaw.uplink_remote_port) : null,
+        systemName: uplinkRaw?.uplink_device_name ?? null,
       }
     : null;
+
   // Switches report bytes-r=0 and rx/tx_bytes=0 at the device level; the
   // real numbers live on each port. Sum across ports when the device
   // total is empty. (Sum double-counts each frame — counted on both the
   // ingress and egress port — which matches how switch fabric throughput
   // is conventionally reported.)
   const portsBytesRate = ports.reduce((s, p) => s + p.rxBps + p.txBps, 0);
-  const bytesRate = d['bytes-r'] || portsBytesRate;
-  const portsRxBytes = (d.port_table ?? []).reduce((s, p) => s + (p.rx_bytes ?? 0), 0);
-  const portsTxBytes = (d.port_table ?? []).reduce((s, p) => s + (p.tx_bytes ?? 0), 0);
-  const rxBytes = d.rx_bytes || portsRxBytes;
-  const txBytes = d.tx_bytes || portsTxBytes;
+  const bytesRate = first('bytes-r') || portsBytesRate;
+  const rxBytes = first('rx_bytes') || ports.reduce((s, p) => s + p.rxBytes, 0);
+  const txBytes = first('tx_bytes') || ports.reduce((s, p) => s + p.txBytes, 0);
+  const model = first('model') ?? '';
+  const tempC =
+    num(first('general_temperature')) ??
+    num(first('temperatures')?.find((t) => t.type === 'cpu')?.value) ??
+    num(first('temperatures')?.[0]?.value);
+  const uplinkSpeed = num(uplinkRaw?.speed);
+
   return {
-    id: d._id ?? d.mac ?? '',
+    id: v._id ?? first('_id') ?? first('mac') ?? '',
     type,
-    name: d.name ?? d.hostname ?? d.mac ?? '',
-    model: d.model ?? '',
-    ip: d.ip ?? null,
-    mac: d.mac ?? '',
-    state: d.state ?? 0,
-    uptimeSec: d.uptime ?? 0,
-    numClients: d.num_sta ?? 0,
+    name: first('name') ?? first('hostname') ?? first('mac') ?? '',
+    model,
+    modelName: modelName(model),
+    ip: first('ip') ?? null,
+    mac: normalizeMac(first('mac')),
+    state: first('state') ?? 0,
+    uptimeSec: first('uptime') ?? 0,
+    lastSeen: num(first('last_seen')),
+    firmware: first('version') ?? '',
+    upgradable: first('upgradable') === true,
+    numClients: first('num_sta') ?? 0,
     bytesRate,
     rxBytes,
     txBytes,
-    satisfaction: d.satisfaction ?? 0,
+    satisfaction: first('satisfaction') ?? 0,
     cpuPct: stats?.cpu ? parsePct(stats.cpu) : null,
     memPct: stats?.mem ? parsePct(stats.mem) : null,
-    tempC: d.general_temperature ?? null,
+    tempC,
+    overheating: first('overheating') === true,
+    fanLevel: num(first('fan_level')),
+    poeBudgetW: (() => {
+      const b = num(first('total_max_power'));
+      return b !== null && b > 0 ? b : null;
+    })(),
+    uplinkSpeedMbps: uplinkSpeed !== null && uplinkSpeed > 0 ? uplinkSpeed : null,
     ports,
-    radios: (d.radio_table_stats ?? []).map(toRadio),
+    radios,
     uplink,
   };
 }
-

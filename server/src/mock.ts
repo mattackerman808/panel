@@ -1,436 +1,838 @@
+import { modelName } from './catalog.js';
 import type {
+  Band,
   ClientStat,
+  DailyUsage,
   DpiCategory,
+  EventSeverity,
   HealthSubsystem,
   NetworkDevice,
+  NetworkPort,
+  NetworkRadio,
   UdmInfo,
   UpsInfo,
   Wan,
 } from './types.js';
 
-const CLIENT_FIXTURES = [
-  { name: 'tv-livingroom', isWired: true, baseDown: 35_000_000, baseUp: 800_000 },
-  { name: 'mbp-matt', isWired: false, baseDown: 8_000_000, baseUp: 2_500_000 },
-  { name: 'iphone-matt', isWired: false, baseDown: 1_200_000, baseUp: 200_000 },
-  { name: 'ps5-basement', isWired: true, baseDown: 18_000_000, baseUp: 1_400_000, vendor: 'Sony Interactive Entertainment', device: 'PlayStation 5' },
-  { name: 'nest-thermostat', isWired: false, baseDown: 4_000, baseUp: 2_000, vendor: 'Google, Inc.', device: 'Nest Thermostat' },
-  { name: 'ipad-kitchen', isWired: false, baseDown: 6_000_000, baseUp: 400_000, vendor: 'Apple, Inc.', device: 'iPad' },
-  { name: 'sonos-livingroom', isWired: false, baseDown: 1_800_000, baseUp: 80_000, vendor: 'Sonos, Inc.', device: 'Sonos Speaker' },
-  { name: 'macbook-work', isWired: true, baseDown: 12_000_000, baseUp: 4_000_000, vendor: 'Apple, Inc.', device: 'MacBook Pro' },
-  { name: 'nas-storage', isWired: true, baseDown: 200_000, baseUp: 5_000_000, vendor: 'Synology Inc.', device: 'NAS' },
-  { name: 'unifi-camera-front', isWired: true, baseDown: 80_000, baseUp: 1_200_000, vendor: 'Ubiquiti Inc.', device: 'UniFi Protect Camera' },
-  { name: 'unifi-camera-back', isWired: true, baseDown: 80_000, baseUp: 1_100_000, vendor: 'Ubiquiti Inc.', device: 'UniFi Protect Camera' },
-  { name: 'roku-bedroom', isWired: false, baseDown: 9_000_000, baseUp: 100_000, vendor: 'Roku, Inc.', device: 'Roku Streaming Stick' },
-  { name: 'switch-lite', isWired: false, baseDown: 800_000, baseUp: 60_000, vendor: 'Nintendo Co., Ltd.', device: 'Nintendo Switch Lite' },
-  { name: 'ring-doorbell', isWired: false, baseDown: 40_000, baseUp: 380_000, vendor: 'Amazon Technologies Inc.', device: 'Ring Doorbell' },
-  { name: 'echo-kitchen', isWired: false, baseDown: 30_000, baseUp: 12_000, vendor: 'Amazon Technologies Inc.', device: 'Echo Dot' },
-  { name: 'hue-bridge', isWired: true, baseDown: 8_000, baseUp: 4_000, vendor: 'Philips Lighting BV', device: 'Hue Bridge' },
-  { name: 'pihole-pi', isWired: true, baseDown: 100_000, baseUp: 50_000, vendor: 'Raspberry Pi Foundation', device: 'Raspberry Pi' },
+/** Synthetic network modeled on the real fleet this dashboard was built for
+ *  (one gateway, an aggregation switch feeding a core and a cabinet switch,
+ *  seven leaf switches, six APs, ~100 clients) so the UI is exercised at the
+ *  density it will see in production.
+ *
+ *  Everything is a pure function of the wall-clock time `t`, so the poller
+ *  can replay the last 15 minutes at startup to pre-fill histories and get
+ *  the same numbers it would have produced live. Jitter is hashed from the
+ *  tick bucket rather than drawn from Math.random for the same reason. */
+
+const DOMAIN = '808.org';
+
+// --- deterministic helpers -------------------------------------------------
+
+function hash(n: number): number {
+  let x = Math.imul(n | 0, 0x45d9f3b);
+  x = Math.imul((x >>> 16) ^ x, 0x45d9f3b);
+  x = (x >>> 16) ^ x;
+  return (x >>> 0) / 4294967296;
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+/** Slow-moving 0.15..1.1 envelope, deterministic in t (ms). */
+function envelope(t: number, phase = 0): number {
+  const s = t / 1000 + phase;
+  return clamp(
+    0.55 + 0.25 * Math.sin(s / 97) + 0.15 * Math.sin(s / 31 + 1.3) + 0.08 * Math.sin(s / 7.1 + 0.4),
+    0.15,
+    1.1,
+  );
+}
+
+/** Per-tick jitter in [-1, 1], stable for a given (time bucket, seed). */
+function jitter(t: number, seed: number, bucketMs = 2000): number {
+  return hash(Math.floor(t / bucketMs) * 7919 + seed * 104729) * 2 - 1;
+}
+
+/** Occasional traffic bursts: a multiplier >= 1 for part of a 20s window. */
+function burst(t: number, seed: number): number {
+  const b = Math.floor(t / 20_000);
+  const h = hash(b * 31 + seed);
+  if (h < 0.16) {
+    const within = (t % 20_000) / 20_000;
+    return 1 + 7 * Math.sin(Math.PI * within) * (0.4 + h);
+  }
+  return 1;
+}
+
+function mac(prefix: string, i: number): string {
+  return `${prefix}:${((i >> 8) & 255).toString(16).padStart(2, '0')}:${(i & 255).toString(16).padStart(2, '0')}`;
+}
+
+function dayLabel(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// --- fixtures ----------------------------------------------------------------
+
+type SwitchFixture = {
+  key: string;
+  name: string;
+  model: string;
+  ports: number;
+  /** SFP/SFP+ cages at the end of the port range (10G). */
+  sfpPorts: number;
+  rj45Mbps: number;
+  poeBudget: number | null;
+  uplinkTo: string;
+  uplinkMbps: number;
+  /** Ports to light up (live-fleet numbers), including uplink/downlinks. */
+  upPorts: number;
+};
+
+const SWITCHES: SwitchFixture[] = [
+  { key: 'agg', name: 'agg', model: 'USL8A', ports: 8, sfpPorts: 8, rj45Mbps: 0, poeBudget: null, uplinkTo: 'udm', uplinkMbps: 10000, upPorts: 6 },
+  { key: 'core', name: 'core', model: 'USWED72', ports: 28, sfpPorts: 4, rj45Mbps: 2500, poeBudget: 400, uplinkTo: 'agg', uplinkMbps: 10000, upPorts: 18 },
+  { key: 'cabinet', name: 'cabinet', model: 'USPM24P', ports: 26, sfpPorts: 2, rj45Mbps: 1000, poeBudget: 400, uplinkTo: 'agg', uplinkMbps: 10000, upPorts: 14 },
+  { key: 'livingsw', name: 'livingsw', model: 'USPM16P', ports: 18, sfpPorts: 2, rj45Mbps: 1000, poeBudget: 180, uplinkTo: 'core', uplinkMbps: 10000, upPorts: 7 },
+  { key: 'bnlsw2', name: 'bnlsw2', model: 'USWED37', ports: 10, sfpPorts: 2, rj45Mbps: 2500, poeBudget: 120, uplinkTo: 'core', uplinkMbps: 10000, upPorts: 4 },
+  { key: 'desk10g', name: '10g-desksw', model: 'USFXG', ports: 5, sfpPorts: 0, rj45Mbps: 10000, poeBudget: null, uplinkTo: 'core', uplinkMbps: 10000, upPorts: 2 },
+  { key: 'desk2g', name: '2g-desksw', model: 'USWED35', ports: 5, sfpPorts: 0, rj45Mbps: 2500, poeBudget: null, uplinkTo: 'core', uplinkMbps: 2500, upPorts: 3 },
+  { key: 'desksw', name: 'desksw', model: 'USWED37', ports: 10, sfpPorts: 2, rj45Mbps: 2500, poeBudget: 120, uplinkTo: 'core', uplinkMbps: 10000, upPorts: 2 },
+  { key: 'bnlsw', name: 'bnlsw', model: 'USWED35', ports: 5, sfpPorts: 0, rj45Mbps: 2500, poeBudget: null, uplinkTo: 'core', uplinkMbps: 2500, upPorts: 2 },
+  { key: 'mainbedsw', name: 'mainbedsw', model: 'USWED35', ports: 5, sfpPorts: 0, rj45Mbps: 2500, poeBudget: null, uplinkTo: 'core', uplinkMbps: 2500, upPorts: 3 },
 ];
 
+type ApFixture = {
+  key: string;
+  name: string;
+  model: string;
+  uplinkTo: string;
+  clients: number;
+  radios: Array<{ band: Band; channel: number; bw: number; util: number }>;
+};
+
+const APS: ApFixture[] = [
+  { key: 'garage', name: 'garage-ap', model: 'U7PRO', uplinkTo: 'core', clients: 14, radios: [{ band: '2g', channel: 1, bw: 20, util: 38 }, { band: '5g', channel: 52, bw: 80, util: 3 }, { band: '6g', channel: 125, bw: 320, util: 2 }] },
+  { key: 'backyard', name: 'backyard-ap', model: 'UKPW', uplinkTo: 'core', clients: 5, radios: [{ band: '2g', channel: 6, bw: 20, util: 51 }, { band: '5g', channel: 136, bw: 80, util: 2 }] },
+  { key: 'dining', name: 'dining-ap', model: 'U7PRO', uplinkTo: 'core', clients: 8, radios: [{ band: '2g', channel: 1, bw: 20, util: 38 }, { band: '5g', channel: 104, bw: 80, util: 1 }, { band: '6g', channel: 209, bw: 320, util: 1 }] },
+  { key: 'bnlroom', name: 'bnlroom-ap', model: 'U7PRO', uplinkTo: 'bnlsw2', clients: 5, radios: [{ band: '2g', channel: 1, bw: 20, util: 56 }, { band: '5g', channel: 40, bw: 80, util: 3 }, { band: '6g', channel: 109, bw: 320, util: 1 }] },
+  { key: 'mainbed', name: 'mainbed-ap', model: 'U7PRO', uplinkTo: 'core', clients: 8, radios: [{ band: '2g', channel: 6, bw: 20, util: 47 }, { band: '5g', channel: 132, bw: 80, util: 1 }, { band: '6g', channel: 169, bw: 320, util: 2 }] },
+  { key: 'living', name: 'living-ap', model: 'U7PRO', uplinkTo: 'core', clients: 9, radios: [{ band: '2g', channel: 11, bw: 20, util: 24 }, { band: '5g', channel: 153, bw: 80, util: 5 }, { band: '6g', channel: 37, bw: 320, util: 2 }] },
+];
+
+type ClientClass = 'server' | 'camera' | 'tv' | 'console' | 'pc' | 'iot' | 'phone' | 'audio' | 'infra';
+
+type ClientFixture = { name: string; cls: ClientClass; vendor: string; device: string | null };
+
+const WIRED_CLIENTS: ClientFixture[] = [
+  { name: 'nas-01', cls: 'server', vendor: 'Synology Inc.', device: 'Synology NAS' },
+  { name: 'nas-02', cls: 'server', vendor: 'Synology Inc.', device: 'Synology NAS' },
+  { name: 'proxmox-01', cls: 'server', vendor: 'Super Micro Computer, Inc.', device: 'Server' },
+  { name: 'proxmox-02', cls: 'server', vendor: 'Super Micro Computer, Inc.', device: 'Server' },
+  { name: 'proxmox-03', cls: 'server', vendor: 'Dell Inc.', device: 'PowerEdge Server' },
+  { name: 'plex', cls: 'server', vendor: 'Intel Corporate', device: 'NUC' },
+  { name: 'homeassistant', cls: 'infra', vendor: 'Raspberry Pi Foundation', device: 'Home Assistant' },
+  { name: 'protect-nvr', cls: 'server', vendor: 'Ubiquiti Inc.', device: 'UNVR' },
+  { name: 'cam-front-door', cls: 'camera', vendor: 'Ubiquiti Inc.', device: 'G5 Bullet' },
+  { name: 'cam-driveway', cls: 'camera', vendor: 'Ubiquiti Inc.', device: 'G5 Pro' },
+  { name: 'cam-backyard', cls: 'camera', vendor: 'Ubiquiti Inc.', device: 'G5 Bullet' },
+  { name: 'cam-garage', cls: 'camera', vendor: 'Ubiquiti Inc.', device: 'G4 Dome' },
+  { name: 'cam-side-gate', cls: 'camera', vendor: 'Ubiquiti Inc.', device: 'G5 Turret' },
+  { name: 'cam-pool', cls: 'camera', vendor: 'Ubiquiti Inc.', device: 'G5 Bullet' },
+  { name: 'tv-living', cls: 'tv', vendor: 'LG Electronics', device: 'LG OLED TV' },
+  { name: 'appletv-living', cls: 'tv', vendor: 'Apple, Inc.', device: 'Apple TV 4K' },
+  { name: 'appletv-bedroom', cls: 'tv', vendor: 'Apple, Inc.', device: 'Apple TV 4K' },
+  { name: 'appletv-bnl', cls: 'tv', vendor: 'Apple, Inc.', device: 'Apple TV 4K' },
+  { name: 'shield-tv', cls: 'tv', vendor: 'NVIDIA', device: 'Shield TV' },
+  { name: 'xbox-series-x', cls: 'console', vendor: 'Microsoft Corporation', device: 'Xbox Series X' },
+  { name: 'ps5', cls: 'console', vendor: 'Sony Interactive Entertainment', device: 'PlayStation 5' },
+  { name: 'desk-pc', cls: 'pc', vendor: 'ASUSTek Computer Inc.', device: 'Desktop PC' },
+  { name: 'workstation-lab', cls: 'pc', vendor: 'Dell Inc.', device: 'Precision Workstation' },
+  { name: 'mac-studio', cls: 'pc', vendor: 'Apple, Inc.', device: 'Mac Studio' },
+  { name: 'printer-office', cls: 'iot', vendor: 'Brother Industries', device: 'Laser Printer' },
+  { name: 'hue-bridge', cls: 'iot', vendor: 'Philips Lighting BV', device: 'Hue Bridge' },
+  { name: 'pi-hole', cls: 'infra', vendor: 'Raspberry Pi Foundation', device: 'Raspberry Pi' },
+  { name: 'pi-kiosk', cls: 'infra', vendor: 'Raspberry Pi Foundation', device: 'Raspberry Pi 5' },
+  { name: 'sonos-amp-patio', cls: 'audio', vendor: 'Sonos, Inc.', device: 'Sonos Amp' },
+  { name: 'denon-avr', cls: 'audio', vendor: 'D&M Holdings', device: 'Denon AVR' },
+  { name: 'lutron-bridge', cls: 'iot', vendor: 'Lutron Electronics', device: 'Caséta Bridge' },
+  { name: 'garage-door-hub', cls: 'iot', vendor: 'Chamberlain Group', device: 'myQ Hub' },
+  { name: 'ipmi-proxmox-01', cls: 'infra', vendor: 'Super Micro Computer, Inc.', device: 'IPMI' },
+  { name: 'ipmi-proxmox-02', cls: 'infra', vendor: 'Super Micro Computer, Inc.', device: 'IPMI' },
+  { name: 'idrac-proxmox-03', cls: 'infra', vendor: 'Dell Inc.', device: 'iDRAC' },
+  { name: 'ups-rmcard', cls: 'infra', vendor: 'Cyber Power Systems', device: 'RMCARD' },
+  { name: 'pdu-rack', cls: 'infra', vendor: 'APC', device: 'Rack PDU' },
+  { name: 'octoprint', cls: 'infra', vendor: 'Raspberry Pi Foundation', device: 'Raspberry Pi' },
+  { name: 'k8s-node-1', cls: 'server', vendor: 'Intel Corporate', device: 'NUC' },
+  { name: 'k8s-node-2', cls: 'server', vendor: 'Intel Corporate', device: 'NUC' },
+  { name: 'k8s-node-3', cls: 'server', vendor: 'Intel Corporate', device: 'NUC' },
+  { name: 'truenas-backup', cls: 'server', vendor: 'Super Micro Computer, Inc.', device: 'Server' },
+  { name: 'pool-controller', cls: 'iot', vendor: 'Pentair', device: 'IntelliCenter' },
+  { name: 'weather-station', cls: 'iot', vendor: 'Ambient Weather', device: 'Weather Station' },
+  { name: 'tv-bnl', cls: 'tv', vendor: 'Samsung Electronics', device: 'Samsung TV' },
+  { name: 'tv-garage', cls: 'tv', vendor: 'TCL', device: 'Roku TV' },
+  { name: 'sonos-port', cls: 'audio', vendor: 'Sonos, Inc.', device: 'Sonos Port' },
+  { name: 'lab-mgmt', cls: 'infra', vendor: 'Raspberry Pi Foundation', device: 'Raspberry Pi' },
+];
+
+const WIRELESS_CLIENTS: ClientFixture[] = [
+  { name: 'iphone-matt', cls: 'phone', vendor: 'Apple, Inc.', device: 'iPhone 16 Pro' },
+  { name: 'iphone-partner', cls: 'phone', vendor: 'Apple, Inc.', device: 'iPhone 15' },
+  { name: 'ipad-kitchen', cls: 'phone', vendor: 'Apple, Inc.', device: 'iPad' },
+  { name: 'ipad-kid', cls: 'phone', vendor: 'Apple, Inc.', device: 'iPad' },
+  { name: 'macbook-pro', cls: 'pc', vendor: 'Apple, Inc.', device: 'MacBook Pro' },
+  { name: 'macbook-air', cls: 'pc', vendor: 'Apple, Inc.', device: 'MacBook Air' },
+  { name: 'pixel-9', cls: 'phone', vendor: 'Google, Inc.', device: 'Pixel 9' },
+  { name: 'galaxy-s24', cls: 'phone', vendor: 'Samsung Electronics', device: 'Galaxy S24' },
+  { name: 'apple-watch-matt', cls: 'iot', vendor: 'Apple, Inc.', device: 'Apple Watch' },
+  { name: 'apple-watch-partner', cls: 'iot', vendor: 'Apple, Inc.', device: 'Apple Watch' },
+  { name: 'homepod-living', cls: 'audio', vendor: 'Apple, Inc.', device: 'HomePod' },
+  { name: 'homepod-kitchen', cls: 'audio', vendor: 'Apple, Inc.', device: 'HomePod mini' },
+  { name: 'homepod-bnl', cls: 'audio', vendor: 'Apple, Inc.', device: 'HomePod mini' },
+  { name: 'nest-thermostat', cls: 'iot', vendor: 'Google, Inc.', device: 'Nest Thermostat' },
+  { name: 'nest-protect-hall', cls: 'iot', vendor: 'Google, Inc.', device: 'Nest Protect' },
+  { name: 'nest-protect-garage', cls: 'iot', vendor: 'Google, Inc.', device: 'Nest Protect' },
+  { name: 'ring-doorbell', cls: 'camera', vendor: 'Amazon Technologies Inc.', device: 'Ring Doorbell' },
+  { name: 'ring-cam-side', cls: 'camera', vendor: 'Amazon Technologies Inc.', device: 'Ring Stick Up Cam' },
+  { name: 'echo-kitchen', cls: 'audio', vendor: 'Amazon Technologies Inc.', device: 'Echo Dot' },
+  { name: 'echo-bedroom', cls: 'audio', vendor: 'Amazon Technologies Inc.', device: 'Echo Dot' },
+  { name: 'echo-office', cls: 'audio', vendor: 'Amazon Technologies Inc.', device: 'Echo Show' },
+  { name: 'roku-guest', cls: 'tv', vendor: 'Roku, Inc.', device: 'Roku Streaming Stick' },
+  { name: 'fire-tv-garage', cls: 'tv', vendor: 'Amazon Technologies Inc.', device: 'Fire TV Stick' },
+  { name: 'kindle', cls: 'phone', vendor: 'Amazon Technologies Inc.', device: 'Kindle' },
+  { name: 'sonos-move', cls: 'audio', vendor: 'Sonos, Inc.', device: 'Sonos Move' },
+  { name: 'sonos-roam', cls: 'audio', vendor: 'Sonos, Inc.', device: 'Sonos Roam' },
+  { name: 'plug-coffee', cls: 'iot', vendor: 'Meross', device: 'Smart Plug' },
+  { name: 'plug-lamp', cls: 'iot', vendor: 'Meross', device: 'Smart Plug' },
+  { name: 'plug-heater', cls: 'iot', vendor: 'Meross', device: 'Smart Plug' },
+  { name: 'wyze-cam-garage', cls: 'camera', vendor: 'Wyze Labs', device: 'Wyze Cam' },
+  { name: 'robot-vacuum', cls: 'iot', vendor: 'Roborock', device: 'Robot Vacuum' },
+  { name: 'litter-robot', cls: 'iot', vendor: 'Whisker', device: 'Litter-Robot' },
+  { name: 'ecobee-sensor', cls: 'iot', vendor: 'ecobee', device: 'SmartSensor' },
+  { name: 'rachio', cls: 'iot', vendor: 'Rachio', device: 'Irrigation Controller' },
+  { name: 'tesla-model-y', cls: 'iot', vendor: 'Tesla Motors', device: 'Model Y' },
+  { name: 'ev-charger', cls: 'iot', vendor: 'Tesla Motors', device: 'Wall Connector' },
+  { name: 'traeger', cls: 'iot', vendor: 'Traeger', device: 'Pellet Grill' },
+  { name: 'govee-lights', cls: 'iot', vendor: 'Govee', device: 'LED Strip' },
+  { name: 'nanoleaf', cls: 'iot', vendor: 'Nanoleaf', device: 'Light Panels' },
+  { name: 'meta-quest-3', cls: 'console', vendor: 'Meta Platforms', device: 'Quest 3' },
+  { name: 'steam-deck', cls: 'console', vendor: 'Valve Corporation', device: 'Steam Deck' },
+  { name: 'ipad-pro', cls: 'phone', vendor: 'Apple, Inc.', device: 'iPad Pro' },
+  { name: 'thinkpad-work', cls: 'pc', vendor: 'Lenovo', device: 'ThinkPad' },
+  { name: 'dell-xps', cls: 'pc', vendor: 'Dell Inc.', device: 'XPS 15' },
+  { name: 'framework-laptop', cls: 'pc', vendor: 'Framework Computer', device: 'Framework 13' },
+  { name: 'pixel-tablet', cls: 'phone', vendor: 'Google, Inc.', device: 'Pixel Tablet' },
+  { name: 'garmin-watch', cls: 'iot', vendor: 'Garmin International', device: 'Garmin Watch' },
+  { name: 'withings-scale', cls: 'iot', vendor: 'Withings', device: 'Body Scale' },
+  { name: 'guest-phone', cls: 'phone', vendor: 'OnePlus Technology', device: 'OnePlus 12' },
+];
+
+const CLASS_RATE: Record<ClientClass, { rx: number; tx: number; steady: boolean }> = {
+  server: { rx: 900_000, tx: 2_400_000, steady: false },
+  camera: { rx: 20_000, tx: 480_000, steady: true },
+  tv: { rx: 2_600_000, tx: 60_000, steady: false },
+  console: { rx: 1_200_000, tx: 120_000, steady: false },
+  pc: { rx: 700_000, tx: 260_000, steady: false },
+  iot: { rx: 4_000, tx: 2_500, steady: true },
+  phone: { rx: 240_000, tx: 60_000, steady: false },
+  audio: { rx: 180_000, tx: 12_000, steady: true },
+  infra: { rx: 25_000, tx: 40_000, steady: true },
+};
+
+const CLASS_NETWORK: Record<ClientClass, string> = {
+  server: 'Servers',
+  camera: 'Cameras',
+  tv: 'Media',
+  console: 'Media',
+  pc: 'LAN',
+  iot: 'IoT',
+  phone: 'LAN',
+  audio: 'Media',
+  infra: 'Management',
+};
+
 const DPI_CATEGORY_FIXTURES = [
-  { name: 'Streaming', weight: 62 },
-  { name: 'Web', weight: 14 },
-  { name: 'Games', weight: 9 },
-  { name: 'Social', weight: 6 },
-  { name: 'Cloud', weight: 4 },
-  { name: 'Conferencing', weight: 3 },
-  { name: 'Update Tools', weight: 2 },
+  { name: 'Network protocols', weight: 67.5 },
+  { name: 'Web services', weight: 15.4 },
+  { name: 'Media streaming services', weight: 10.1 },
+  { name: 'Unknown', weight: 1.5 },
+  { name: 'Social networks', weight: 1.3 },
+  { name: 'File sharing services and tools', weight: 1.1 },
+  { name: 'Remote access terminals', weight: 0.9 },
+  { name: 'Security update tools', weight: 0.5 },
+  { name: 'Games', weight: 0.4 },
+  { name: 'Mail and collaboration', weight: 0.3 },
 ];
 
 const DPI_APP_FIXTURES = [
-  { name: 'YouTube', weight: 28 },
-  { name: 'Netflix', weight: 22 },
-  { name: 'iCloud', weight: 12 },
-  { name: 'SSL/TLS', weight: 10 },
-  { name: 'Zoom', weight: 7 },
-  { name: 'Discord', weight: 5 },
-  { name: 'Steam', weight: 4 },
-  { name: 'GitHub', weight: 3 },
+  { name: 'SSL/TLS', weight: 59.5 },
+  { name: 'Speedtest.net', weight: 15.8 },
+  { name: 'rsync', weight: 7.4 },
+  { name: 'YouTube', weight: 4.8 },
+  { name: 'Radio streaming services', weight: 1.7 },
+  { name: 'iCloud', weight: 1.5 },
+  { name: 'Netflix', weight: 1.3 },
+  { name: 'Unknown', weight: 1.3 },
+  { name: 'Apple TV+', weight: 0.9 },
+  { name: 'Steam', weight: 0.8 },
+  { name: 'Plex', weight: 0.7 },
+  { name: 'Zoom', weight: 0.5 },
+  { name: 'GitHub', weight: 0.4 },
+  { name: 'Spotify', weight: 0.4 },
 ];
 
-type WanState = {
-  rxTotal: number;
-  txTotal: number;
-  monthRx: number;
-  monthTx: number;
-  phaseOffset: number;
-  baseRx: number;
-  baseTx: number;
-  ifName: string;
-  ip: string;
-  ipv6: string | null;
+// --- world -------------------------------------------------------------------
+
+type PortShell = {
+  idx: number;
+  name: string;
+  media: string;
+  speedMbps: number;
+  isUplink: boolean;
+  /** What hangs off this port: another switch/AP (by key), a wired client (index), or nothing. */
+  link: { kind: 'device'; key: string } | { kind: 'client'; idx: number } | null;
+  poeWatts: number;
 };
-const WANS: WanState[] = [
-  {
-    rxTotal: 1_200_000_000_000,
-    txTotal: 180_000_000_000,
-    monthRx: 1_420_000_000_000,
-    monthTx: 95_000_000_000,
-    phaseOffset: 0,
-    baseRx: 60_000_000,
-    baseTx: 4_000_000,
-    ifName: 'eth9',
-    ip: '203.0.113.42',
-    ipv6: '2600:1700:5451:1cf0::1/64',
-  },
-  {
-    rxTotal: 600_000_000_000,
-    txTotal: 80_000_000_000,
-    monthRx: 280_000_000_000,
-    monthTx: 18_000_000_000,
-    phaseOffset: 3.7,
-    baseRx: 28_000_000,
-    baseTx: 2_000_000,
-    ifName: 'eth10',
-    ip: '198.51.100.7',
-    ipv6: null,
-  },
+
+type DeviceShell = {
+  key: string;
+  kind: 'udm' | 'uci' | 'usw' | 'uap';
+  name: string;
+  model: string;
+  mac: string;
+  ip: string;
+  uplinkTo: string | null;
+  uplinkMbps: number;
+  ports: PortShell[];
+  ap: ApFixture | null;
+  sw: SwitchFixture | null;
+  /** Wired client indexes attached directly (for `numClients`). */
+  wiredClients: number[];
+};
+
+type ClientShell = ClientFixture & {
+  idx: number;
+  isWired: boolean;
+  mac: string;
+  ip: string;
+  attachedTo: string; // device key
+  swPort: number | null;
+  band: Band | null;
+  channel: number | null;
+  essid: string | null;
+  isGuest: boolean;
+  signal: number | null;
+  rate: number | null;
+  seed: number;
+  firstSeen: number;
+};
+
+const UDM_KEY = 'udm';
+const UCI_KEY = 'modem';
+const WAN_FIXTURES = [
+  { id: 'wan1', label: 'ATT Fiber', ifName: 'eth12', ifIndex: 14, speed: 10_000_000_000, baseRx: 24_000_000, baseTx: 5_500_000, ip: '203.0.113.42', ipv6: '2600:1700:5451:1cf0::1', isp: { name: 'AT&T Internet', org: 'AT&T Enterprises, LLC', asn: 7018 }, latency: 5, dayRx: 120e9, dayTx: 18e9 },
+  { id: 'wan2', label: 'Xfinity', ifName: 'eth8', ifIndex: 10, speed: 2_500_000_000, baseRx: 900_000, baseTx: 220_000, ip: '198.51.100.7', ipv6: null, isp: { name: 'Xfinity / Comcast', org: 'Comcast Cable Communications, LLC', asn: 7922 }, latency: 12, dayRx: 9e9, dayTx: 1.5e9 },
 ];
 
-function currentMonthLabel(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-let phase = 0;
+export type MockWorld = ReturnType<typeof createMockWorld>;
 
-function noise(amp: number): number {
-  return (Math.random() - 0.5) * amp;
-}
+export function createMockWorld() {
+  const startedAt = Date.now();
+  const devices = new Map<string, DeviceShell>();
+  const clients: ClientShell[] = [];
 
-function envelope(t: number): number {
-  return 0.65 + 0.25 * Math.sin(t / 9.7) + 0.15 * Math.sin(t / 3.3 + 1.1) + 0.1 * Math.sin(t / 1.7);
-}
-
-export function mockWans(intervalMs = 2000): Wan[] {
-  phase += intervalMs / 1000;
-  return WANS.map((w, i) => {
-    const env = envelope(phase + w.phaseOffset);
-    const rx = Math.max(0, w.baseRx * env + noise(w.baseRx * 0.25));
-    const tx = Math.max(0, w.baseTx * env + noise(w.baseTx * 0.25));
-    w.rxTotal += (rx * intervalMs) / 1000;
-    w.txTotal += (tx * intervalMs) / 1000;
-    w.monthRx += (rx * intervalMs) / 1000;
-    w.monthTx += (tx * intervalMs) / 1000;
-    return {
-      id: `wan${i + 1}`,
-      ifIndex: i + 3,
-      ifName: w.ifName,
-      label: i === 0 ? 'ATT Fiber' : 'Xfinity',
-      speedBitsPerSec: i === 0 ? 10_000_000_000 : 2_500_000_000,
-      rxBps: rx,
-      txBps: tx,
-      rxTotal: w.rxTotal,
-      txTotal: w.txTotal,
-      wanIp: w.ip,
-      wanIpv6: w.ipv6,
-      status: 'ok',
-      latencyMs: 6 + Math.random() * 6 + i * 4,
-      monthRxBytes: w.monthRx,
-      monthTxBytes: w.monthTx,
-      monthLabel: currentMonthLabel(),
-    };
+  // Gateway + modem
+  devices.set(UDM_KEY, {
+    key: UDM_KEY, kind: 'udm', name: `unifi.${DOMAIN}`, model: 'UDMPROMAX', mac: mac('d0:21:f9:a0', 1), ip: '10.80.0.1',
+    uplinkTo: null, uplinkMbps: 0, ap: null, sw: null, wiredClients: [],
+    ports: Array.from({ length: 14 }, (_, i) => ({
+      idx: i + 1, name: `Port ${i + 1}`, media: i >= 8 ? 'SFP+' : 'GE', speedMbps: 0, isUplink: false, link: null, poeWatts: 0,
+    })),
   });
-}
+  devices.set(UCI_KEY, {
+    key: UCI_KEY, kind: 'uci', name: 'Cable Modem', model: 'UCI', mac: mac('d0:21:f9:a0', 2), ip: '192.168.100.1',
+    uplinkTo: null, uplinkMbps: 0, ap: null, sw: null, wiredClients: [],
+    ports: [{ idx: 1, name: 'Port 1', media: 'GE', speedMbps: 2500, isUplink: false, link: null, poeWatts: 0 }],
+  });
 
-const ISP_FIXTURES = [
-  { name: 'AT&T Internet', org: 'AT&T Enterprises, LLC', asn: 7018 },
-  { name: 'Xfinity / Comcast', org: 'Comcast Cable Communications, LLC', asn: 7922 },
-];
+  // Switches
+  SWITCHES.forEach((s, i) => {
+    const ports: PortShell[] = Array.from({ length: s.ports }, (_, p) => {
+      const idx = p + 1;
+      const isSfp = idx > s.ports - s.sfpPorts;
+      return {
+        idx,
+        name: isSfp ? `SFP+ ${idx}` : `Port ${idx}`,
+        media: isSfp ? 'SFP+' : s.rj45Mbps >= 10000 ? '10GE' : s.rj45Mbps >= 2500 ? '2.5GE' : 'GE',
+        speedMbps: 0,
+        isUplink: false,
+        link: null,
+        poeWatts: 0,
+      };
+    });
+    devices.set(s.key, {
+      key: s.key, kind: 'usw', name: `${s.name}.${DOMAIN}`, model: s.model, mac: mac('d0:21:f9:b0', i + 1), ip: `10.80.1.${10 + i}`,
+      uplinkTo: s.uplinkTo, uplinkMbps: s.uplinkMbps, ap: null, sw: s, wiredClients: [], ports,
+    });
+  });
+  // APs (no ports of their own)
+  APS.forEach((a, i) => {
+    devices.set(a.key, {
+      key: a.key, kind: 'uap', name: `${a.name}.${DOMAIN}`, model: a.model, mac: mac('d0:21:f9:c0', i + 1), ip: `10.80.1.${40 + i}`,
+      uplinkTo: a.uplinkTo, uplinkMbps: 2500, ap: a, sw: null, wiredClients: [], ports: [],
+    });
+  });
 
-function mockMonitors(latencyBase: number): HealthSubsystem['monitors'] {
-  return [
-    { target: 'www.microsoft.com', type: 'icmp', latencyMs: Math.max(1, Math.round(latencyBase + 5 + noise(2))), availabilityPct: 100 },
-    { target: 'google.com', type: 'icmp', latencyMs: Math.max(1, Math.round(latencyBase * 4 + noise(5))), availabilityPct: 100 },
-    { target: '1.1.1.1', type: 'icmp', latencyMs: Math.max(1, Math.round(latencyBase + noise(1))), availabilityPct: 100 },
-    { target: '1.1.1.1', type: 'dns', latencyMs: Math.max(1, Math.round(latencyBase + 1 + noise(1))), availabilityPct: 100 },
-    { target: '8.8.8.8', type: 'dns', latencyMs: Math.max(1, Math.round(latencyBase * 6 + noise(3))), availabilityPct: 100 },
-    { target: 'ping.ui.com', type: 'icmp', latencyMs: Math.max(1, Math.round(latencyBase + noise(1))), availabilityPct: 100 },
-  ];
-}
+  // --- cabling ---------------------------------------------------------------
+  const takePort = (dev: DeviceShell, preferSfp: boolean): PortShell | null => {
+    const free = dev.ports.filter((p) => !p.link && !p.isUplink);
+    const sfp = free.filter((p) => p.media === 'SFP+');
+    const rj = free.filter((p) => p.media !== 'SFP+');
+    const pick = preferSfp ? (sfp[0] ?? rj[0]) : (rj[0] ?? sfp[0]);
+    return pick ?? null;
+  };
+  const uplinkPort = (dev: DeviceShell): PortShell | null => {
+    if (dev.ports.length === 0) return null;
+    const sfp = dev.ports.filter((p) => p.media === 'SFP+');
+    return sfp.length > 0 ? sfp[sfp.length - 1]! : dev.ports[0]!;
+  };
 
-export function mockHealth(wans: Wan[]): HealthSubsystem[] {
-  const out: HealthSubsystem[] = [];
-  for (let i = 0; i < wans.length; i++) {
-    const w = wans[i]!;
-    const isp = ISP_FIXTURES[i] ?? null;
-    const latencyBase = (w.latencyMs ?? 8) / 1.4;
-    out.push({
-      name: i === 0 ? 'wan' : `wan${i + 1}`,
-      status: 'ok',
-      latencyMs: w.latencyMs ?? 8,
-      drops: Math.floor(Math.abs(noise(20))),
-      uptimeSec: 1_500_000 + i * 100_000,
-      xputDownMbps: null,
-      xputUpMbps: null,
-      speedtestLastRunTs: null,
-      speedtestStatus: null,
-      numUser: null,
-      numGuest: null,
-      wanIp: w.wanIp,
-      availabilityPct: 99.5 + Math.random() * 0.5,
-      monitors: mockMonitors(latencyBase),
-      ispName: isp?.name ?? null,
-      ispOrg: isp?.org ?? null,
-      asn: isp?.asn ?? null,
+  // UDM LAN port to the aggregation switch; WAN ports light up too.
+  const udm = devices.get(UDM_KEY)!;
+  udm.ports[12]!.speedMbps = 10000; // eth12 → fiber
+  udm.ports[8]!.speedMbps = 2500; // eth8 → cable
+  udm.ports[10]!.link = { kind: 'device', key: 'agg' };
+  udm.ports[10]!.speedMbps = 10000;
+
+  for (const s of SWITCHES) {
+    const dev = devices.get(s.key)!;
+    const up = uplinkPort(dev)!;
+    up.isUplink = true;
+    up.speedMbps = s.uplinkMbps;
+    up.link = { kind: 'device', key: s.uplinkTo };
+    if (s.uplinkTo !== UDM_KEY) {
+      const parent = devices.get(s.uplinkTo)!;
+      const pp = takePort(parent, s.uplinkMbps >= 10000);
+      if (pp) {
+        pp.link = { kind: 'device', key: s.key };
+        pp.speedMbps = Math.min(s.uplinkMbps, pp.media === 'SFP+' ? 10000 : parent.sw?.rj45Mbps ?? 1000);
+      }
+    }
+  }
+  for (const a of APS) {
+    const parent = devices.get(a.uplinkTo)!;
+    const pp = takePort(parent, false);
+    if (pp) {
+      pp.link = { kind: 'device', key: a.key };
+      pp.speedMbps = Math.min(2500, parent.sw?.rj45Mbps ?? 1000);
+      pp.poeWatts = a.model === 'UKPW' ? 6.4 : 9.8 + hash(a.key.length * 17) * 3;
+    }
+  }
+
+  // --- clients ---------------------------------------------------------------
+  const wiredSlots: Array<{ devKey: string; port: PortShell }> = [];
+  for (const s of SWITCHES) {
+    const dev = devices.get(s.key)!;
+    const used = dev.ports.filter((p) => p.link || p.isUplink).length;
+    let remaining = Math.max(0, s.upPorts - used);
+    for (const p of dev.ports) {
+      if (remaining <= 0) break;
+      if (p.link || p.isUplink) continue;
+      wiredSlots.push({ devKey: s.key, port: p });
+      remaining--;
+    }
+  }
+  // The wired client list is longer than the live port budget; the surplus
+  // simply isn't plugged in, so port counts match the real fleet.
+  WIRED_CLIENTS.forEach((c, i) => {
+    const slot = wiredSlots[i];
+    if (!slot) return;
+    const dev = devices.get(slot.devKey)!;
+    slot.port.link = { kind: 'client', idx: clients.length };
+    slot.port.speedMbps = c.cls === 'server' ? Math.min(10000, dev.sw?.rj45Mbps ?? 1000) : Math.min(1000, dev.sw?.rj45Mbps ?? 1000);
+    if (c.cls === 'camera') slot.port.poeWatts = 4.2 + hash(i * 3) * 2.5;
+    dev.wiredClients.push(clients.length);
+    clients.push({
+      ...c, idx: clients.length, isWired: true, mac: mac('3c:22:fb:10', i + 1), ip: `10.80.${c.cls === 'camera' ? 30 : c.cls === 'iot' ? 20 : 10}.${20 + i}`,
+      attachedTo: slot.devKey, swPort: slot.port.idx, band: null, channel: null, essid: null, isGuest: false, signal: null,
+      rate: slot.port.speedMbps, seed: 1000 + i, firstSeen: Math.floor(startedAt / 1000) - 86400 * (3 + (i % 40)),
+    });
+  });
+  let wi = 0;
+  for (const a of APS) {
+    const dev = devices.get(a.key)!;
+    for (let k = 0; k < a.clients && wi < WIRELESS_CLIENTS.length; k++, wi++) {
+      const c = WIRELESS_CLIENTS[wi]!;
+      const has6 = a.radios.some((r) => r.band === '6g');
+      const roll = hash(wi * 11 + 5);
+      const band: Band = c.cls === 'iot' || c.cls === 'audio' ? (roll < 0.75 ? '2g' : '5g') : has6 && roll < 0.35 ? '6g' : roll < 0.85 ? '5g' : '2g';
+      const radio = a.radios.find((r) => r.band === band) ?? a.radios[0]!;
+      const isGuest = c.name === 'guest-phone';
+      const signal = -(42 + Math.round(hash(wi * 7 + 1) * 34) + (band === '2g' ? 0 : 4));
+      const rate = band === '6g' ? 1201 + Math.round(hash(wi) * 1200) : band === '5g' ? 433 + Math.round(hash(wi + 1) * 800) : 72 + Math.round(hash(wi + 2) * 200);
+      clients.push({
+        ...c, idx: clients.length, isWired: false, mac: mac('f0:2f:4b:20', wi + 1), ip: `10.80.${c.cls === 'iot' ? 20 : isGuest ? 90 : 10}.${120 + wi}`,
+        attachedTo: a.key, swPort: null, band, channel: radio.channel, essid: isGuest ? 'Hale808-Guest' : c.cls === 'iot' ? 'Hale808-IoT' : 'Hale808', isGuest, signal,
+        rate, seed: 2000 + wi, firstSeen: Math.floor(startedAt / 1000) - 86400 * (1 + (wi % 90)),
+      });
+    }
+  }
+
+  // --- per-tick state ----------------------------------------------------------
+
+  /** bnlsw drops off the controller for 50s every 20 minutes, so the alert
+   *  strip and the event log get exercised without flooding them. */
+  const switchOffline = (key: string, t: number): boolean => key === 'bnlsw' && (t / 60_000) % 20 < 0.84;
+  /** garage-ap's 2.4 GHz radio gets congested for a minute every 10. */
+  const congested = (key: string, t: number): boolean => key === 'garage' && (t / 60_000) % 10 >= 2 && (t / 60_000) % 10 < 3.2;
+
+  function clientRates(c: ClientShell, t: number): { rx: number; tx: number } {
+    const base = CLASS_RATE[c.cls];
+    const env = base.steady ? 0.85 + 0.15 * envelope(t, c.seed) : envelope(t, c.seed) * (0.6 + 0.8 * hash(c.seed + Math.floor(t / 60_000)));
+    const j = 1 + 0.25 * jitter(t, c.seed);
+    const b = base.steady ? 1 : burst(t, c.seed);
+    return { rx: Math.max(0, base.rx * env * j * b), tx: Math.max(0, base.tx * env * j * (b > 1 ? 1 + (b - 1) * 0.3 : 1)) };
+  }
+
+  /** Throughput (bytes/s, rx+tx) flowing through a device's downstream side. */
+  const subtreeRate = new Map<string, { rx: number; tx: number }>();
+  function computeRates(t: number): void {
+    subtreeRate.clear();
+    const order = [...devices.values()].filter((d) => d.kind !== 'udm' && d.kind !== 'uci').reverse();
+    // APs first (leaves), then switches bottom-up: the fixture order lists
+    // parents before children, so reversing processes children first.
+    for (const d of order) {
+      let rx = 0;
+      let tx = 0;
+      if (d.kind === 'uap' && d.ap) {
+        for (const c of clients) if (!c.isWired && c.attachedTo === d.key) { const r = clientRates(c, t); rx += r.rx; tx += r.tx; }
+      } else {
+        for (const p of d.ports) {
+          if (!p.link || p.isUplink) continue;
+          if (p.link.kind === 'client') { const r = clientRates(clients[p.link.idx]!, t); rx += r.rx; tx += r.tx; }
+          else { const sub = subtreeRate.get(p.link.key); if (sub) { rx += sub.rx; tx += sub.tx; } }
+        }
+      }
+      subtreeRate.set(d.key, { rx, tx });
+    }
+  }
+
+  function portRate(d: DeviceShell, p: PortShell, t: number): { rx: number; tx: number } {
+    if (!p.link) return { rx: 0, tx: 0 };
+    if (p.isUplink) {
+      const sub = subtreeRate.get(d.key) ?? { rx: 0, tx: 0 };
+      // From the uplink port's perspective, downstream download is this port's rx.
+      return { rx: sub.rx, tx: sub.tx };
+    }
+    if (p.link.kind === 'client') { const r = clientRates(clients[p.link.idx]!, t); return { rx: r.tx, tx: r.rx }; }
+    const sub = subtreeRate.get(p.link.key) ?? { rx: 0, tx: 0 };
+    return { rx: sub.tx, tx: sub.rx };
+  }
+
+  function buildPort(d: DeviceShell, p: PortShell, t: number, deviceUp: boolean): NetworkPort {
+    const linkedDev = p.link?.kind === 'device' ? devices.get(p.link.key) ?? null : null;
+    const linkedDown = linkedDev && linkedDev.kind === 'usw' ? switchOffline(linkedDev.key, t) : false;
+    const up = deviceUp && (!!p.link || p.speedMbps > 0) && !linkedDown;
+    const r = up ? portRate(d, p, t) : { rx: 0, tx: 0 };
+    const errors = p.idx === 3 && d.key === 'cabinet' ? 1842 : 0;
+    return {
+      idx: p.idx,
+      name: p.name,
+      up,
+      speedMbps: up ? p.speedMbps : 0,
+      isUplink: p.isUplink,
+      poeWatts: up ? p.poeWatts * (0.96 + 0.04 * hash(Math.floor(t / 15_000) + p.idx)) : 0,
+      poeEnabled: p.media !== 'SFP+' && (d.sw?.poeBudget ?? 0) > 0,
+      rxBps: r.rx,
+      txBps: r.tx,
+      rxBytes: up ? 4e9 + p.idx * 7e8 + (r.rx * (t - startedAt)) / 1000 : 0,
+      txBytes: up ? 3e9 + p.idx * 5e8 + (r.tx * (t - startedAt)) / 1000 : 0,
+      rxErrors: errors,
+      txErrors: 0,
+      rxDropped: errors > 0 ? 97 : 0,
+      txDropped: 0,
+      media: p.media,
+      fullDuplex: true,
+      stpState: up ? 'forwarding' : 'disabled',
+      neighbor:
+        linkedDev && (linkedDev.kind === 'usw' || linkedDev.kind === 'udm' || linkedDev.kind === 'uap')
+          ? { chassisId: linkedDev.mac, portId: p.isUplink ? null : `Port ${p.idx}`, systemName: linkedDev.name }
+          : null,
+    };
+  }
+
+  function buildRadios(a: ApFixture, key: string, t: number): NetworkRadio[] {
+    const attached = clients.filter((c) => !c.isWired && c.attachedTo === key);
+    return a.radios.map((r, i) => {
+      const n = attached.filter((c) => c.band === r.band).length;
+      const guest = attached.filter((c) => c.band === r.band && c.isGuest).length;
+      const congestion = r.band === '2g' && congested(key, t) ? 38 : 0;
+      const util = clamp(r.util + congestion + 6 * jitter(t, i + key.length, 15_000), 0, 100);
+      const retries = Math.round((r.band === '2g' ? 0.08 : 0.025) * (1 + congestion / 40) * 400_000);
+      return {
+        name: r.band === '2g' ? 'ng' : r.band === '5g' ? 'na' : '6e',
+        band: r.band,
+        channel: r.channel,
+        bwMhz: r.bw,
+        numClients: n,
+        guestClients: guest,
+        utilizationPct: util,
+        cuSelfRx: util * 0.3,
+        cuSelfTx: util * 0.2,
+        satisfaction: clamp(98 - congestion * 0.8 - (r.band === '2g' ? 6 : 0), 0, 100),
+        txRetries: retries,
+        txPackets: 400_000,
+        txPowerDbm: r.band === '2g' ? 20 : 23,
+      };
     });
   }
-  const baseHealth: Omit<HealthSubsystem, 'name'> = {
-    status: 'ok',
-    latencyMs: null,
-    drops: null,
-    uptimeSec: null,
-    xputDownMbps: null,
-    xputUpMbps: null,
-    speedtestLastRunTs: null,
-    speedtestStatus: null,
-    numUser: null,
-    numGuest: null,
-    wanIp: null,
-    availabilityPct: null,
-    monitors: [],
-    ispName: null,
-    ispOrg: null,
-    asn: null,
-  };
-  out.push({
-    ...baseHealth,
-    name: 'www',
-    latencyMs: 8 + noise(2),
-    drops: 0,
-    uptimeSec: 1_500_000,
-    xputDownMbps: 940 + noise(20),
-    xputUpMbps: 880 + noise(20),
-    speedtestLastRunTs: Math.floor(Date.now() / 1000) - 6 * 3600,
-    speedtestStatus: 'Idle',
-  });
-  out.push({ ...baseHealth, name: 'lan', numUser: 32, numGuest: 0 });
-  out.push({ ...baseHealth, name: 'wlan', numUser: 47, numGuest: 3 });
-  out.push({ ...baseHealth, name: 'vpn', numUser: 1 });
-  return out;
-}
 
-export function mockClients(): ClientStat[] {
-  const env = envelope(phase);
-  return CLIENT_FIXTURES.map((c, i) => {
-    const jitter = 0.7 + Math.random() * 0.6;
-    const rxBps = c.baseDown * env * jitter;
-    const txBps = c.baseUp * env * jitter;
+  function buildDevice(d: DeviceShell, t: number): NetworkDevice {
+    const offline = d.kind === 'usw' && switchOffline(d.key, t);
+    const upState = offline ? 0 : 1;
+    const ports = d.ports.map((p) => buildPort(d, p, t, !offline));
+    const radios = d.ap ? buildRadios(d.ap, d.key, t) : [];
+    const sub = subtreeRate.get(d.key) ?? { rx: 0, tx: 0 };
+    const seed = d.key.length * 31 + d.name.charCodeAt(0);
+    const bytesRate = d.kind === 'usw' ? ports.reduce((s, p) => s + p.rxBps + p.txBps, 0) : sub.rx + sub.tx;
+    const parent = d.uplinkTo ? devices.get(d.uplinkTo) ?? null : null;
+    const parentPort = parent?.ports.find((p) => p.link?.kind === 'device' && p.link.key === d.key) ?? null;
+    const clientsOn = d.kind === 'uap' ? radios.reduce((s, r) => s + r.numClients, 0) : d.wiredClients.length + ports.filter((p) => p.up && p.neighbor && !p.isUplink).length;
     return {
-      id: `mock-${i}`,
-      name: c.name,
-      ip: `192.168.1.${20 + i}`,
-      mac: `aa:bb:cc:${i.toString(16).padStart(2, '0')}:00:00`,
-      rxBps,
-      txBps,
-      rxBytes: 1_000_000_000 + i * 50_000_000 + Math.floor(rxBps * phase),
-      txBytes: 100_000_000 + i * 5_000_000 + Math.floor(txBps * phase),
-      isWired: c.isWired,
-      signal: c.isWired ? null : -45 - Math.floor(Math.random() * 30),
-      vendor: c.vendor ?? null,
-      device: c.device ?? null,
-      firstSeen: Math.floor(Date.now() / 1000) - 86400 - i * 3600,
-      lastSeen: Math.floor(Date.now() / 1000),
-    };
-  });
-}
-
-export function mockDpi(): { apps: DpiCategory[]; categories: DpiCategory[] } {
-  const build = (fixtures: { name: string; weight: number }[], prefix: string) => {
-    const totalWeight = fixtures.reduce((a, b) => a + b.weight, 0);
-    return fixtures.map((d, i) => ({
-      id: `${prefix}-${i}`,
+      id: `mock-${d.key}`,
+      type: d.kind,
       name: d.name,
-      bytes: d.weight * 100_000_000_000,
-      pct: d.weight / totalWeight,
-    }));
-  };
-  return {
-    apps: build(DPI_APP_FIXTURES, 'mock-app'),
-    categories: build(DPI_CATEGORY_FIXTURES, 'mock-cat'),
-  };
-}
-
-export function mockUdm(): UdmInfo {
-  const env = envelope(phase);
-  return {
-    name: 'UDM Pro Max',
-    model: 'UDM-Pro-Max',
-    firmware: '4.1.13',
-    uptimeSec: 1_234_567 + Math.floor(phase),
-    cpuPct: 12 + env * 25 + noise(3),
-    memPct: 38 + noise(4),
-    tempC: 52 + env * 4 + noise(1),
-  };
-}
-
-// Mock topology. UDM is the root; AGG_SWITCH_INDEX is the one switch
-// that uplinks directly to the UDM, every other switch uplinks to it.
-// APs uplink to the switch named in their `uplinkSwitch` field.
-const UDM_MAC = 'bb:aa:cc:00:00:00';
-const UDM_NAME = 'udm.808.org';
-const SWITCH_MAC = (i: number): string => `aa:bb:cc:ee:00:${i.toString(16).padStart(2, '0')}`;
-const AP_MAC = (i: number): string => `aa:bb:cc:dd:00:${i.toString(16).padStart(2, '0')}`;
-const AGG_SWITCH_INDEX = 1; // rack-sw-1
-
-const AP_FIXTURES = [
-  { name: 'garage-ap.808.org', model: 'U7PRO', clients: 5, ch24: 6, ch5: 100, ch6: 49, uplinkSwIdx: 3 },
-  { name: 'dining-ap.808.org', model: 'U7PRO', clients: 14, ch24: 1, ch5: 36, ch6: 1, uplinkSwIdx: 5 },
-  { name: 'living-ap.808.org', model: 'U7PRO', clients: 11, ch24: 11, ch5: 149, ch6: 17, uplinkSwIdx: 4 },
-  { name: 'mainbed-ap.808.org', model: 'U7PRO', clients: 6, ch24: 6, ch5: 44, ch6: 33, uplinkSwIdx: 7 },
-  { name: 'bnlroom-ap.808.org', model: 'U7PRO', clients: 8, ch24: 1, ch5: 64, ch6: 65, uplinkSwIdx: 7 },
-  { name: 'backyard-ap.808.org', model: 'UKPW', clients: 3, ch24: 6, ch5: 36, ch6: 0, uplinkSwIdx: 3 },
-];
-
-// Each switch uplinks to AGG_SWITCH_INDEX, except the agg itself which
-// uplinks to the UDM.
-const SWITCH_FIXTURES = [
-  { name: 'desksw.808.org', model: 'USPM16P', portsActive: 12, portsTotal: 18, poeWatts: 32 },
-  { name: 'rack-sw-1.808.org', model: 'USXG24', portsActive: 18, portsTotal: 24, poeWatts: 0 },
-  { name: 'rack-sw-2.808.org', model: 'USL24P', portsActive: 8, portsTotal: 24, poeWatts: 96 },
-  { name: 'garage-sw.808.org', model: 'USL16P', portsActive: 5, portsTotal: 16, poeWatts: 18 },
-  { name: 'living-sw.808.org', model: 'USL8P', portsActive: 4, portsTotal: 8, poeWatts: 14 },
-  { name: 'kitchen-sw.808.org', model: 'USL8P', portsActive: 3, portsTotal: 8, poeWatts: 0 },
-  { name: 'office-sw.808.org', model: 'USL8P', portsActive: 6, portsTotal: 8, poeWatts: 22 },
-  { name: 'bnlroom-sw.808.org', model: 'USL8P', portsActive: 2, portsTotal: 8, poeWatts: 7 },
-];
-
-export function mockDevices(): NetworkDevice[] {
-  const env = envelope(phase);
-  const aps: NetworkDevice[] = AP_FIXTURES.map((a, i) => ({
-    id: `mock-ap-${i}`,
-    type: 'uap',
-    name: a.name,
-    model: a.model,
-    ip: `192.168.1.${10 + i}`,
-    mac: AP_MAC(i),
-    state: 1,
-    uptimeSec: 1_000_000 + i * 100_000,
-    numClients: a.clients,
-    bytesRate: a.clients * 800_000 * env + noise(50_000),
-    rxBytes: 20_000_000_000 + i * 1_000_000_000,
-    txBytes: 4_000_000_000 + i * 200_000_000,
-    satisfaction: 90 + Math.floor(noise(8)),
-    cpuPct: 8 + env * 12 + noise(3),
-    memPct: 25 + noise(5),
-    tempC: null,
-    ports: [],
-    radios: [
-      { name: 'ng', band: '2g', channel: a.ch24, bwMhz: 20, numClients: Math.floor(a.clients * 0.2), utilizationPct: 18 + noise(8), satisfaction: 95, txRetries: 1000 + Math.floor(noise(500)), txPackets: 100_000 },
-      { name: 'na', band: '5g', channel: a.ch5, bwMhz: 80, numClients: Math.floor(a.clients * 0.5), utilizationPct: 32 + noise(15), satisfaction: 92, txRetries: 5000 + Math.floor(noise(2000)), txPackets: 500_000 },
-      ...(a.ch6
-        ? ([
-            { name: '6e', band: '6g' as const, channel: a.ch6, bwMhz: 160, numClients: Math.floor(a.clients * 0.3), utilizationPct: 12 + noise(6), satisfaction: 98, txRetries: 200 + Math.floor(noise(100)), txPackets: 200_000 },
-          ])
-        : []),
-    ],
-    uplink: {
-      chassisId: SWITCH_MAC(a.uplinkSwIdx),
-      portId: `Port ${i + 2}`,
-      systemName: SWITCH_FIXTURES[a.uplinkSwIdx]?.name ?? null,
-    },
-  }));
-  const sws: NetworkDevice[] = SWITCH_FIXTURES.map((s, i) => {
-    const isAgg = i === AGG_SWITCH_INDEX;
-    const upstreamMac = isAgg ? UDM_MAC : SWITCH_MAC(AGG_SWITCH_INDEX);
-    const upstreamName = isAgg ? UDM_NAME : SWITCH_FIXTURES[AGG_SWITCH_INDEX]!.name;
-    // Heavier uplink throughput than other ports — this is what the
-    // topology page should highlight.
-    const uplinkRx = (isAgg ? 80_000_000 : 12_000_000) * env + noise(2_000_000);
-    const uplinkTx = (isAgg ? 80_000_000 : 12_000_000) * env + noise(2_000_000);
-    return {
-      id: `mock-sw-${i}`,
-      type: 'usw',
-      name: s.name,
-      model: s.model,
-      ip: `192.168.1.${30 + i}`,
-      mac: SWITCH_MAC(i),
-      state: 1,
-      uptimeSec: 2_000_000 + i * 100_000,
-      numClients: s.portsActive,
-      bytesRate: s.portsActive * 400_000 * env + noise(100_000),
-      rxBytes: 50_000_000_000 + i * 5_000_000_000,
-      txBytes: 50_000_000_000 + i * 5_000_000_000,
-      satisfaction: 95 + Math.floor(noise(5)),
-      cpuPct: 5 + env * 8 + noise(2),
-      memPct: 20 + noise(4),
-      tempC: 42 + env * 4 + noise(2),
-      ports: Array.from({ length: s.portsTotal }, (_, p) => ({
-        idx: p + 1,
-        name: `Port ${p + 1}`,
-        up: p < s.portsActive,
-        speedMbps: p < s.portsActive ? (p === 0 ? 10000 : 1000) : 0,
-        isUplink: p === 0,
-        poeWatts: p < s.portsActive && s.poeWatts > 0 ? s.poeWatts / s.portsActive : 0,
-        rxBps: p === 0 ? Math.max(0, uplinkRx) : p < s.portsActive ? 200_000 + noise(100_000) : 0,
-        txBps: p === 0 ? Math.max(0, uplinkTx) : p < s.portsActive ? 200_000 + noise(100_000) : 0,
-        neighbor:
-          p === 0
-            ? { chassisId: upstreamMac, portId: null, systemName: upstreamName }
+      model: d.model,
+      modelName: modelName(d.model),
+      ip: d.ip,
+      mac: d.mac,
+      state: upState,
+      uptimeSec: offline ? 0 : 1_900_000 + seed * 1000 + Math.floor((t - startedAt) / 1000),
+      lastSeen: Math.floor(t / 1000),
+      firmware: d.kind === 'uap' ? '7.2.26' : d.kind === 'usw' ? '7.2.26' : d.kind === 'udm' ? '5.1.33' : '1.0.2',
+      upgradable: d.key === 'cabinet',
+      numClients: offline ? 0 : clientsOn,
+      bytesRate: offline ? 0 : bytesRate,
+      rxBytes: 40e9 + seed * 1e9,
+      txBytes: 32e9 + seed * 8e8,
+      satisfaction: d.kind === 'uap' ? Math.round(radios.reduce((s, r) => s + r.satisfaction, 0) / Math.max(1, radios.length)) : 100,
+      cpuPct: offline ? null : clamp((d.kind === 'uap' ? 2 : d.key === 'desk10g' ? 46 : 9) + 4 * envelope(t, seed) + 2 * jitter(t, seed, 15_000), 0, 100),
+      memPct: offline ? null : clamp((d.kind === 'uap' ? 48 : 31) + 3 * jitter(t, seed + 1, 60_000), 0, 100),
+      tempC: d.kind === 'usw' && d.sw?.poeBudget ? 46 + 5 * envelope(t, seed) : d.kind === 'udm' ? 45 + 2 * envelope(t, seed) : null,
+      overheating: false,
+      fanLevel: d.kind === 'udm' ? 2 : null,
+      poeBudgetW: d.sw?.poeBudget ?? null,
+      uplinkSpeedMbps: d.uplinkMbps || null,
+      ports,
+      radios,
+      uplink:
+        d.kind === 'uap' && parent
+          ? { chassisId: parent.mac, portId: parentPort ? String(parentPort.idx) : null, systemName: parent.name }
+          : d.kind === 'udm'
+            ? { chassisId: devices.get(UCI_KEY)!.mac, portId: null, systemName: 'Cable Modem' }
             : null,
-      })),
-      radios: [],
-      uplink: null,
     };
-  });
-  // UDM as a device so the topology page can render it as a node. WAN
-  // ports sit on the UDM; the LAN port that uplinks to the agg switch
-  // doesn't get a neighbor here because the agg switch already reports
-  // the link back from its side (deduped in the topology builder).
-  const udm: NetworkDevice = {
-    id: 'mock-udm',
-    type: 'udm',
-    name: UDM_NAME,
-    model: 'UDM-Pro-Max',
-    ip: '192.168.1.1',
-    mac: UDM_MAC,
-    state: 1,
-    uptimeSec: 1_234_567 + Math.floor(phase),
-    numClients: 0,
-    bytesRate: 0,
-    rxBytes: 0,
-    txBytes: 0,
-    satisfaction: 100,
-    cpuPct: 12 + env * 25 + noise(3),
-    memPct: 38 + noise(4),
-    tempC: 52 + env * 4 + noise(1),
-    ports: [],
-    radios: [],
-    uplink: null,
-  };
-  return [udm, ...aps, ...sws];
-}
+  }
 
-/** Synthetic UPS telemetry so the power page is exercisable without a real
- *  UPS. Models a ~900 VA unit on mains at a steady load, with slow noise on
- *  load/voltage and a full battery. Roughly what an APC SMT-class unit
- *  reports over RFC 1628. */
-export function mockUps(): UpsInfo {
-  const t = Date.now() / 1000;
-  const slow = (period: number, amp: number, ph = 0) => Math.sin((t / period) * Math.PI * 2 + ph) * amp;
-  const loadPct = Math.max(4, Math.min(95, 34 + slow(90, 6) + slow(17, 2)));
-  const outputVoltage = 120 + slow(23, 1.4);
-  const ratedW = 1500;
-  const outputPowerW = Math.round((loadPct / 100) * ratedW);
-  const outputCurrentA = outputPowerW / outputVoltage;
-  return {
-    reachable: true,
-    manufacturer: 'CyberPower',
-    model: 'PR1500RTXL2UC',
-    batteryStatus: 'normal',
-    onBattery: false,
-    secondsOnBattery: 0,
-    minutesRemaining: Math.round(41 - loadPct * 0.25),
-    chargePct: 100,
-    batteryVoltage: 56.8 + slow(60, 0.2),
-    batteryTempC: 26 + slow(300, 1.2),
-    inputVoltage: Math.round(120 + slow(19, 1.8)),
-    inputFrequencyHz: 60 + slow(40, 0.03),
-    outputSource: 'normal',
-    outputVoltage: Math.round(outputVoltage),
-    outputFrequencyHz: 60 + slow(40, 0.03),
-    outputCurrentA: Math.round(outputCurrentA * 10) / 10,
-    outputPowerW,
-    loadPct: Math.round(loadPct),
-  };
+  // --- public API --------------------------------------------------------------
+
+  function wans(t: number): Wan[] {
+    const now = new Date(t);
+    const monthLabel = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const daily = usageDaily(t);
+    return WAN_FIXTURES.map((w, i) => {
+      const env = envelope(t, i * 3.7);
+      const rx = Math.max(0, w.baseRx * env * burst(t, 50 + i) * (1 + 0.2 * jitter(t, 60 + i)));
+      const tx = Math.max(0, w.baseTx * env * (1 + 0.2 * jitter(t, 70 + i)));
+      const days = daily[w.id] ?? [];
+      const today = days[days.length - 1];
+      const month = days.filter((d) => d.date.startsWith(monthLabel));
+      return {
+        id: w.id,
+        ifIndex: w.ifIndex,
+        ifName: w.ifName,
+        label: w.label,
+        speedBitsPerSec: w.speed,
+        rxBps: rx,
+        txBps: tx,
+        rxTotal: 1.2e15 + (w.baseRx * (t - startedAt)) / 1000,
+        txTotal: 1.8e14 + (w.baseTx * (t - startedAt)) / 1000,
+        wanIp: w.ip,
+        wanIpv6: w.ipv6,
+        status: 'ok',
+        latencyMs: Math.round(w.latency + 2 * envelope(t, 9 + i) + 1.5 * jitter(t, 80 + i, 6000)),
+        monthRxBytes: month.reduce((s, d) => s + d.rxBytes, 0),
+        monthTxBytes: month.reduce((s, d) => s + d.txBytes, 0),
+        monthLabel,
+        dayRxBytes: today?.rxBytes ?? 0,
+        dayTxBytes: today?.txBytes ?? 0,
+        dayLabel: today?.date ?? dayLabel(now),
+        ispName: w.isp.name,
+        ispOrg: w.isp.org,
+        asn: w.isp.asn,
+        availabilityPct: 99.5 + 0.5 * hash(i + Math.floor(t / 3_600_000)),
+        uptimeSec: 1_500_000 + i * 100_000 + Math.floor((t - startedAt) / 1000),
+        drops: Math.floor(hash(i * 3 + Math.floor(t / 600_000)) * 12),
+        monitors: mockMonitors(w.latency, t, i),
+      };
+    });
+  }
+
+  function usageDaily(t: number): Record<string, DailyUsage[]> {
+    const out: Record<string, DailyUsage[]> = {};
+    const now = new Date(t);
+    const dayFrac = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400;
+    WAN_FIXTURES.forEach((w, wi) => {
+      const days: DailyUsage[] = [];
+      for (let back = 30; back >= 0; back--) {
+        const d = new Date(now);
+        d.setDate(now.getDate() - back);
+        const dayKey = d.getFullYear() * 400 + d.getMonth() * 31 + d.getDate();
+        const weekend = d.getDay() === 0 || d.getDay() === 6;
+        const scale = (0.55 + 0.9 * hash(dayKey * 7 + wi)) * (weekend ? 1.35 : 1);
+        const frac = back === 0 ? dayFrac : 1;
+        days.push({ date: dayLabel(d), rxBytes: w.dayRx * scale * frac, txBytes: w.dayTx * (0.6 + 0.8 * hash(dayKey * 11 + wi)) * frac });
+      }
+      out[w.id] = days;
+    });
+    return out;
+  }
+
+  function mockMonitors(latencyBase: number, t: number, i: number): HealthSubsystem['monitors'] {
+    const j = (s: number) => 1 + 0.15 * jitter(t, s + i * 9, 10_000);
+    return [
+      { target: 'www.microsoft.com', type: 'icmp', latencyMs: Math.round((latencyBase + 5) * j(1)), availabilityPct: 100 },
+      { target: 'google.com', type: 'icmp', latencyMs: Math.round((latencyBase + 3) * j(2)), availabilityPct: 100 },
+      { target: '1.1.1.1', type: 'icmp', latencyMs: Math.round(latencyBase * j(3)), availabilityPct: 100 },
+      { target: '1.1.1.1', type: 'dns', latencyMs: Math.round((latencyBase + 1) * j(4)), availabilityPct: 100 },
+      { target: '8.8.8.8', type: 'dns', latencyMs: Math.round((latencyBase + 4) * j(5)), availabilityPct: 99.8 },
+      { target: 'ping.ui.com', type: 'icmp', latencyMs: Math.round((latencyBase + 9) * j(6)), availabilityPct: 100 },
+    ];
+  }
+
+  function health(current: Wan[], t: number): HealthSubsystem[] {
+    const base: Omit<HealthSubsystem, 'name'> = {
+      status: 'ok', latencyMs: null, drops: null, uptimeSec: null, xputDownMbps: null, xputUpMbps: null, speedtestLastRunTs: null,
+      speedtestStatus: null, numUser: null, numGuest: null, wanIp: null, availabilityPct: null, monitors: [], ispName: null, ispOrg: null, asn: null,
+    };
+    const out: HealthSubsystem[] = current.map((w, i) => ({
+      ...base, name: i === 0 ? 'wan' : `wan${i + 1}`, latencyMs: w.latencyMs, drops: w.drops, uptimeSec: w.uptimeSec, wanIp: w.wanIp,
+      availabilityPct: w.availabilityPct, monitors: w.monitors, ispName: w.ispName, ispOrg: w.ispOrg, asn: w.asn,
+    }));
+    const wired = clients.filter((c) => c.isWired).length;
+    out.push({ ...base, name: 'www', latencyMs: current[0]?.latencyMs ?? 6, drops: 0, uptimeSec: 1_500_000, xputDownMbps: 1172 + 20 * jitter(t, 300, 3_600_000), xputUpMbps: 123 + 4 * jitter(t, 301, 3_600_000), speedtestLastRunTs: Math.floor(t / 1000) - 7 * 3600 - 320, speedtestStatus: 'Idle' });
+    out.push({ ...base, name: 'lan', numUser: wired, numGuest: 0 });
+    out.push({ ...base, name: 'wlan', numUser: clients.length - wired - 1, numGuest: 1 });
+    out.push({ ...base, name: 'vpn', numUser: 1 });
+    return out;
+  }
+
+  function clientStats(t: number): ClientStat[] {
+    return clients
+      .filter((c) => !(c.isWired && switchOffline(c.attachedTo, t)))
+      .map((c) => {
+        const r = clientRates(c, t);
+        const dev = devices.get(c.attachedTo)!;
+        const ageSec = Math.floor(t / 1000) - c.firstSeen;
+        return {
+          id: `mock-c-${c.idx}`,
+          name: c.name,
+          ip: c.ip,
+          mac: c.mac,
+          rxBps: r.rx,
+          txBps: r.tx,
+          rxBytes: (CLASS_RATE[c.cls].rx * 0.4 * Math.min(ageSec, 86400 * 30)) + c.seed * 1e6,
+          txBytes: (CLASS_RATE[c.cls].tx * 0.4 * Math.min(ageSec, 86400 * 30)) + c.seed * 4e5,
+          isWired: c.isWired,
+          isGuest: c.isGuest,
+          signal: c.signal === null ? null : Math.round(c.signal + 2 * jitter(t, c.seed, 30_000)),
+          vendor: c.vendor,
+          device: c.device,
+          firstSeen: c.firstSeen,
+          lastSeen: Math.floor(t / 1000),
+          network: c.isGuest ? 'Guest' : CLASS_NETWORK[c.cls],
+          uplinkMac: dev.mac,
+          swPort: c.swPort,
+          band: c.band,
+          channel: c.channel,
+          essid: c.essid,
+          rxRateMbps: c.rate,
+          txRateMbps: c.rate,
+          satisfaction: c.isWired ? 100 : clamp(100 + (c.signal ?? -50) + 40, 55, 100),
+          uptimeSec: Math.min(ageSec, 86400 * 12 + c.seed),
+        };
+      });
+  }
+
+  function deviceList(t: number): NetworkDevice[] {
+    computeRates(t);
+    return [...devices.values()].map((d) => buildDevice(d, t));
+  }
+
+  function dpi(): { apps: DpiCategory[]; categories: DpiCategory[] } {
+    const build = (fixtures: { name: string; weight: number }[], prefix: string, totalBytes: number) => {
+      const totalWeight = fixtures.reduce((a, b) => a + b.weight, 0);
+      return fixtures.map((d, i) => ({ id: `${prefix}-${i}`, name: d.name, bytes: (d.weight / totalWeight) * totalBytes, pct: d.weight / totalWeight }));
+    };
+    return { apps: build(DPI_APP_FIXTURES, 'mock-app', 357e9), categories: build(DPI_CATEGORY_FIXTURES, 'mock-cat', 378e9) };
+  }
+
+  function udmInfo(t: number): UdmInfo {
+    const env = envelope(t, 2);
+    return {
+      name: `unifi.${DOMAIN}`,
+      model: 'UDMPROMAX',
+      modelName: modelName('UDMPROMAX'),
+      firmware: '5.1.33',
+      uptimeSec: 2_116_343 + Math.floor((t - startedAt) / 1000),
+      cpuPct: clamp(5 + env * 9 + 2 * jitter(t, 400, 15_000), 1, 100),
+      memPct: clamp(49.8 + 1.5 * jitter(t, 401, 60_000), 1, 100),
+      tempC: 44.9 + env * 3 + 0.4 * jitter(t, 402, 15_000),
+    };
+  }
+
+  /** ~900 VA unit on mains at a steady load; slow drift on load/voltage. */
+  function ups(t: number): UpsInfo {
+    const s = t / 1000;
+    const slow = (period: number, amp: number, ph = 0) => Math.sin((s / period) * Math.PI * 2 + ph) * amp;
+    const loadPct = clamp(48 + slow(90, 4) + slow(17, 1.5), 4, 95);
+    const outputVoltage = 116 + slow(23, 1.4);
+    const ratedW = 1500;
+    const outputPowerW = Math.round((loadPct / 100) * ratedW);
+    return {
+      reachable: true,
+      manufacturer: 'CyberPower',
+      model: 'PR1500RTXL2UC',
+      batteryStatus: 'normal',
+      onBattery: false,
+      secondsOnBattery: 0,
+      minutesRemaining: Math.round(50 - loadPct * 0.25),
+      chargePct: 100,
+      batteryVoltage: 54.6 + slow(60, 0.2),
+      batteryTempC: 25 + slow(300, 1.2),
+      inputVoltage: Math.round(116 + slow(19, 1.8)),
+      inputFrequencyHz: 60 + slow(40, 0.03),
+      outputSource: 'normal',
+      outputVoltage: Math.round(outputVoltage),
+      outputFrequencyHz: 60 + slow(40, 0.03),
+      outputCurrentA: Math.round((outputPowerW / outputVoltage) * 10) / 10,
+      outputPowerW,
+      loadPct: Math.round(loadPct),
+    };
+  }
+
+  /** A plausible recent history so the events panel isn't empty on first run. */
+  function seedEvents(record: (e: { severity: EventSeverity; kind: string; subject: string; message: string; ts: number }) => void): void {
+    const now = Date.now();
+    const h = 3_600_000;
+    record({ ts: now - 2 * 24 * h - 4 * 60_000, severity: 'crit', kind: 'ups.battery', subject: 'UPS', message: 'UPS transferred to battery — mains power lost' });
+    record({ ts: now - 2 * 24 * h, severity: 'info', kind: 'ups.mains', subject: 'UPS', message: 'UPS back on mains power' });
+    record({ ts: now - 26 * h, severity: 'info', kind: 'device.firmware', subject: `core.${DOMAIN}`, message: `core.${DOMAIN} updated to 7.2.26` });
+    record({ ts: now - 9 * h, severity: 'info', kind: 'wan.ip', subject: 'Xfinity', message: 'Xfinity public IP changed to 198.51.100.7' });
+    record({ ts: now - 3 * h - 140_000, severity: 'warn', kind: 'device.offline', subject: `living-ap.${DOMAIN}`, message: `living-ap.${DOMAIN} lost contact` });
+    record({ ts: now - 3 * h, severity: 'info', kind: 'device.online', subject: `living-ap.${DOMAIN}`, message: `living-ap.${DOMAIN} is back online` });
+  }
+
+  return { wans, usageDaily, health, clients: clientStats, devices: deviceList, dpi, udm: udmInfo, ups, seedEvents };
 }

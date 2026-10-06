@@ -1,287 +1,123 @@
 @import 'tailwindcss';
-@import '@fontsource-variable/inter';
-@import '@fontsource-variable/jetbrains-mono';
-@import '@fontsource/saira-condensed/400.css';
-@import '@fontsource/saira-condensed/600.css';
-@import '@fontsource/saira-condensed/700.css';
+@import '@fontsource-variable/ibm-plex-sans';
+@import '@fontsource/ibm-plex-sans-condensed/500.css';
+@import '@fontsource/ibm-plex-sans-condensed/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
 
 /* ============================================================
-   Semantic design tokens.
-   Roles:
-     --c-bg-*       backgrounds
-     --c-line-*     borders / dividers
-     --c-primary    primary accent (rx/down/headers)
-     --c-secondary  secondary accent (tx/up)
-     --c-ok|warn|err
-     --c-text-*     text
-     --dpi-1..8     palette for category visualizations
-     --frame-corner chamfer size for HUD frames
-     --glow-mult    multiplier on text-shadow blur radius
+   Design tokens.
+
+   Layout: a fixed, non-scrolling 16:9 stage. One persistent status bar on
+   top, one page below it, a labeled page bar at the bottom. Everything is
+   sized in rem and the root font-size tracks the viewport width, so the
+   same composition fits a 1080p kiosk panel and a 4K wall display.
+
+   Color roles:
+     --bg / --surface / --surface-2 / --surface-3   page and panel planes
+     --line / --line-strong                          hairlines
+     --ink / --ink-2 / --ink-3                       text: primary, secondary, labels
+     --accent                                        UI accent (active state, brand, neutral meters)
+     --rx / --tx                                     the two data series: download, upload
+     --ok / --warn / --crit                          reserved status colors, always with a label
+   Themes change the planes and the accent only; the data and status colors
+   carry meaning and are the same everywhere.
    ============================================================ */
 
 :root,
-[data-theme='hud'] {
-  /* NOC-style dark theme: legible at distance, low neon, tuned for
-     a kiosk monitor. Display font is Inter (variable) for clean
-     letterforms; data still uses JetBrains Mono. */
-  --c-bg: #0b0f17;
-  --c-bg-panel: #121826;
-  --c-bg-panel-2: #19223a;
-  --c-bg-overlay: rgba(11, 15, 23, 0.7);
+[data-theme='graphite'] {
+  color-scheme: dark;
 
-  --c-line: #1f2a3d;
-  --c-line-bright: #2e3d56;
+  --bg: #0a0e13;
+  --surface: #10161e;
+  --surface-2: #161e28;
+  --surface-3: #1d2733;
+  --line: rgba(163, 184, 210, 0.11);
+  --line-strong: rgba(163, 184, 210, 0.22);
 
-  --c-primary: #5db8ff;
-  --c-secondary: #ffb454;
-  --c-ok: #4ade80;
-  --c-warn: #fbbf24;
-  --c-err: #f87171;
+  --ink: #e9eff7;
+  --ink-2: #a3b2c5;
+  --ink-3: #65798f;
 
-  --c-text-bright: #ecf2fb;
-  --c-text: #94a3b8;
-  --c-text-dim: #607189;
+  --accent: #5fb4ff;
+  --accent-soft: rgba(95, 180, 255, 0.14);
 
-  --dpi-1: #5db8ff;
-  --dpi-2: #ffb454;
-  --dpi-3: #4ade80;
-  --dpi-4: #f472b6;
-  --dpi-5: #f87171;
-  --dpi-6: #a78bfa;
-  --dpi-7: #fb923c;
-  --dpi-8: #34d399;
+  --rx: #2d96dd;
+  --rx-soft: rgba(45, 150, 221, 0.18);
+  --tx: #bf8526;
+  --tx-soft: rgba(191, 133, 38, 0.2);
 
-  --font-display: 'Inter Variable', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+  --ok: #36c27a;
+  --ok-soft: rgba(54, 194, 122, 0.16);
+  --warn: #e3a63a;
+  --warn-soft: rgba(227, 166, 58, 0.16);
+  --crit: #ef5c67;
+  --crit-soft: rgba(239, 92, 103, 0.18);
+  --info: #7aa7e8;
 
-  --frame-corner: 14px;
-  --frame-border-blend: linear-gradient(135deg, var(--c-primary) 0%, var(--c-line-bright) 30%, var(--c-line-bright) 70%, var(--c-secondary) 100%);
-  /* Glow is now a soft halo, not a blur of the letterforms themselves. */
-  --glow-mult: 0.3;
+  --font-ui: 'IBM Plex Sans Variable', 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'IBM Plex Sans Condensed', 'IBM Plex Sans Variable', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 
-  --bg-radial-1: radial-gradient(ellipse at top, color-mix(in oklab, var(--c-primary) 5%, transparent), transparent 60%);
-  --bg-radial-2: radial-gradient(ellipse at bottom right, color-mix(in oklab, var(--c-secondary) 3%, transparent), transparent 60%);
-
-  --noise-opacity: 0;
-  --scanline-opacity: 0;
-  --scanline-step: 4px;
+  --r-panel: 12px;
+  --r-card: 8px;
 }
 
-/* ============================================================
-   Arctic: icy command console — bright cyan/teal on deep slate,
-   crisp and low-glow.
-   ============================================================ */
-
+/* Arctic: cooler teal planes, cyan accent. */
 [data-theme='arctic'] {
-  --c-bg: #071013;
-  --c-bg-panel: #0d1a1f;
-  --c-bg-panel-2: #12242b;
-  --c-bg-overlay: rgba(7, 16, 19, 0.72);
-
-  --c-line: #143038;
-  --c-line-bright: #1f4a56;
-
-  --c-primary: #35e0d4;
-  --c-secondary: #8fc7ff;
-  --c-ok: #52e0a0;
-  --c-warn: #ffcf5c;
-  --c-err: #ff6b7a;
-
-  --c-text-bright: #e6f7fb;
-  --c-text: #9fbdc7;
-  --c-text-dim: #5f8593;
-
-  --dpi-1: #35e0d4;
-  --dpi-2: #8fc7ff;
-  --dpi-3: #52e0a0;
-  --dpi-4: #b98cff;
-  --dpi-5: #ff6b7a;
-  --dpi-6: #5cc8ff;
-  --dpi-7: #2fb8b0;
-  --dpi-8: #7de0c0;
-
-  --font-display: 'Inter Variable', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
-
-  --frame-corner: 12px;
-  --frame-border-blend: linear-gradient(135deg, var(--c-primary) 0%, var(--c-line-bright) 30%, var(--c-line-bright) 70%, var(--c-secondary) 100%);
-  --glow-mult: 0.25;
-
-  --bg-radial-1: radial-gradient(ellipse at top, color-mix(in oklab, var(--c-primary) 6%, transparent), transparent 60%);
-  --bg-radial-2: radial-gradient(ellipse at bottom right, color-mix(in oklab, var(--c-secondary) 4%, transparent), transparent 60%);
-
-  --noise-opacity: 0;
-  --scanline-opacity: 0;
-  --scanline-step: 4px;
+  --bg: #071013;
+  --surface: #0c171d;
+  --surface-2: #112027;
+  --surface-3: #162a33;
+  --line: rgba(140, 200, 215, 0.12);
+  --line-strong: rgba(140, 200, 215, 0.24);
+  --ink: #e6f4f8;
+  --ink-2: #9cbcc7;
+  --ink-3: #5f8290;
+  --accent: #43d6c9;
+  --accent-soft: rgba(67, 214, 201, 0.14);
 }
 
-/* ============================================================
-   Outrun: synthwave night drive — hot magenta + cyan on deep
-   indigo, pronounced bloom and faint scanlines. Condensed
-   display face for the retro-techy vibe.
-   ============================================================ */
-
-[data-theme='outrun'] {
-  --c-bg: #0c0716;
-  --c-bg-panel: #150a26;
-  --c-bg-panel-2: #1e0f38;
-  --c-bg-overlay: rgba(12, 7, 22, 0.75);
-
-  --c-line: #2a1550;
-  --c-line-bright: #43217a;
-
-  --c-primary: #ff4d9d;
-  --c-secondary: #45e0ff;
-  --c-ok: #57e08f;
-  --c-warn: #ffcc4d;
-  --c-err: #ff5470;
-
-  --c-text-bright: #f7e9ff;
-  --c-text: #c3a8d8;
-  --c-text-dim: #8a6fa8;
-
-  --dpi-1: #ff4d9d;
-  --dpi-2: #45e0ff;
-  --dpi-3: #b46bff;
-  --dpi-4: #57e08f;
-  --dpi-5: #ffcc4d;
-  --dpi-6: #ff7ac0;
-  --dpi-7: #6a8bff;
-  --dpi-8: #ff5470;
-
-  --font-display: 'Saira Condensed', 'Inter Variable', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
-
-  --frame-corner: 14px;
-  --frame-border-blend: linear-gradient(135deg, var(--c-primary) 0%, var(--c-line-bright) 30%, var(--c-line-bright) 70%, var(--c-secondary) 100%);
-  --glow-mult: 0.55;
-
-  --bg-radial-1: radial-gradient(ellipse at top, color-mix(in oklab, var(--c-primary) 9%, transparent), transparent 58%);
-  --bg-radial-2: radial-gradient(ellipse at bottom, color-mix(in oklab, var(--c-secondary) 6%, transparent), transparent 62%);
-
-  --noise-opacity: 0;
-  --scanline-opacity: 0.05;
-  --scanline-step: 3px;
-}
-
-/* ============================================================
-   Ember: graphite + ember orange — a warm, modern ops console.
-   Neutral steel panels, flatter corners, restrained glow.
-   ============================================================ */
-
+/* Ember: warm neutral planes, orange accent. */
 [data-theme='ember'] {
-  --c-bg: #0c0e11;
-  --c-bg-panel: #15181d;
-  --c-bg-panel-2: #1c2027;
-  --c-bg-overlay: rgba(12, 14, 17, 0.75);
-
-  --c-line: #262b33;
-  --c-line-bright: #38414d;
-
-  --c-primary: #ff7a45;
-  --c-secondary: #ffd166;
-  --c-ok: #5ad19a;
-  --c-warn: #ffb84d;
-  --c-err: #ff5c5c;
-
-  --c-text-bright: #eef1f5;
-  --c-text: #a7b0bd;
-  --c-text-dim: #6b7686;
-
-  --dpi-1: #ff7a45;
-  --dpi-2: #ffd166;
-  --dpi-3: #5ad19a;
-  --dpi-4: #6aa5ff;
-  --dpi-5: #ff5c5c;
-  --dpi-6: #ff9e6b;
-  --dpi-7: #c98bff;
-  --dpi-8: #4fd0c0;
-
-  --font-display: 'Inter Variable', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
-
-  --frame-corner: 6px;
-  --frame-border-blend: linear-gradient(135deg, var(--c-primary) 0%, var(--c-line-bright) 30%, var(--c-line-bright) 70%, var(--c-secondary) 100%);
-  --glow-mult: 0.3;
-
-  --bg-radial-1: radial-gradient(ellipse at top, color-mix(in oklab, var(--c-primary) 5%, transparent), transparent 60%);
-  --bg-radial-2: radial-gradient(ellipse at bottom right, color-mix(in oklab, var(--c-secondary) 3%, transparent), transparent 60%);
-
-  --noise-opacity: 0;
-  --scanline-opacity: 0;
-  --scanline-step: 4px;
+  --bg: #0e0d0c;
+  --surface: #161513;
+  --surface-2: #1d1b18;
+  --surface-3: #26231f;
+  --line: rgba(220, 200, 170, 0.1);
+  --line-strong: rgba(220, 200, 170, 0.2);
+  --ink: #f1ede6;
+  --ink-2: #b3aa9e;
+  --ink-3: #7a7268;
+  --accent: #ff8a4c;
+  --accent-soft: rgba(255, 138, 76, 0.14);
 }
 
 /* ============================================================
-   Nebula: electric violet + teal on near-black — a deep-space
-   console. Cosmic without sacrificing legibility.
+   Base
    ============================================================ */
 
-[data-theme='nebula'] {
-  --c-bg: #070510;
-  --c-bg-panel: #110c22;
-  --c-bg-panel-2: #190f33;
-  --c-bg-overlay: rgba(7, 5, 16, 0.76);
-
-  --c-line: #241748;
-  --c-line-bright: #3a2470;
-
-  --c-primary: #b28bff;
-  --c-secondary: #5eead4;
-  --c-ok: #6ee7a8;
-  --c-warn: #fbc04d;
-  --c-err: #ff6b8b;
-
-  --c-text-bright: #efe9ff;
-  --c-text: #b6a8d6;
-  --c-text-dim: #7d6fa8;
-
-  --dpi-1: #b28bff;
-  --dpi-2: #5eead4;
-  --dpi-3: #f472b6;
-  --dpi-4: #7dd3fc;
-  --dpi-5: #fbc04d;
-  --dpi-6: #a78bfa;
-  --dpi-7: #34d399;
-  --dpi-8: #ff6b8b;
-
-  --font-display: 'Inter Variable', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
-
-  --frame-corner: 14px;
-  --frame-border-blend: linear-gradient(135deg, var(--c-primary) 0%, var(--c-line-bright) 30%, var(--c-line-bright) 70%, var(--c-secondary) 100%);
-  --glow-mult: 0.42;
-
-  --bg-radial-1: radial-gradient(ellipse at top, color-mix(in oklab, var(--c-primary) 8%, transparent), transparent 58%);
-  --bg-radial-2: radial-gradient(ellipse at bottom, color-mix(in oklab, var(--c-secondary) 5%, transparent), transparent 62%);
-
-  --noise-opacity: 0;
-  --scanline-opacity: 0;
-  --scanline-step: 4px;
+html {
+  height: 100%;
+  /* 1280px → 13px, 1920px → ~15.4px, 2560px → ~20.5px, 4K → 26px */
+  font-size: clamp(13px, 0.8vw, 26px);
 }
 
-
-/* ============================================================
-   Global resets + body chrome
-   ============================================================ */
-
-html,
 body {
   height: 100%;
   margin: 0;
-  background: var(--c-bg);
-  color: var(--c-text-bright);
-  font-family: var(--font-mono);
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
+  line-height: 1.35;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Burn-in guard: smooth transitions for the periodic pixel-drift shifts. */
-.panel-root {
-  transition: transform 1.6s ease-in-out;
-}
-
-body {
-  background: var(--bg-radial-1), var(--bg-radial-2), var(--c-bg);
+html[data-kiosk='1'],
+html[data-kiosk='1'] body {
+  cursor: none !important;
 }
 
 @media (display-mode: fullscreen), (display-mode: standalone) {
@@ -291,230 +127,364 @@ body {
   }
 }
 
-html[data-kiosk='1'],
-html[data-kiosk='1'] body {
-  cursor: none !important;
-}
-
-.hud-noise {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  opacity: var(--noise-opacity);
-  z-index: 100;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
-  mix-blend-mode: overlay;
-}
-
-.hud-scanlines {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 99;
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent calc(var(--scanline-step) - 1px),
-    color-mix(in oklab, var(--c-primary) calc(var(--scanline-opacity) * 100%), transparent) calc(var(--scanline-step) - 0.5px),
-    transparent var(--scanline-step)
-  );
+/* Burn-in guard: smooth transitions for the periodic pixel-drift shifts. */
+.panel-root {
+  transition: transform 1.6s ease-in-out;
 }
 
 /* ============================================================
-   HUD frame: chamfered cut corners
+   Type utilities
    ============================================================ */
 
-.hud-frame {
-  position: relative;
-  background: linear-gradient(
-    180deg,
-    color-mix(in oklab, var(--c-bg-panel) 92%, transparent),
-    color-mix(in oklab, var(--c-bg-panel-2) 92%, transparent)
-  );
-  --corner: var(--frame-corner);
-  clip-path: polygon(
-    0 var(--corner),
-    var(--corner) 0,
-    calc(100% - var(--corner)) 0,
-    100% var(--corner),
-    100% calc(100% - var(--corner)),
-    calc(100% - var(--corner)) 100%,
-    var(--corner) 100%,
-    0 calc(100% - var(--corner))
-  );
+.eyebrow {
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
 }
 
-.hud-frame::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  padding: 1px;
-  background: var(--frame-border-blend);
-  clip-path: polygon(
-    0 var(--corner),
-    var(--corner) 0,
-    calc(100% - var(--corner)) 0,
-    100% var(--corner),
-    100% calc(100% - var(--corner)),
-    calc(100% - var(--corner)) 100%,
-    var(--corner) 100%,
-    0 calc(100% - var(--corner)),
-    0 var(--corner),
-    1px calc(var(--corner) + 0.4px),
-    1px calc(100% - var(--corner) - 0.4px),
-    calc(var(--corner) + 0.4px) calc(100% - 1px),
-    calc(100% - var(--corner) - 0.4px) calc(100% - 1px),
-    calc(100% - 1px) calc(100% - var(--corner) - 0.4px),
-    calc(100% - 1px) calc(var(--corner) + 0.4px),
-    calc(100% - var(--corner) - 0.4px) 1px,
-    calc(var(--corner) + 0.4px) 1px,
-    1px calc(var(--corner) + 0.4px)
-  );
-  pointer-events: none;
-}
-
-.hud-corner {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  border-color: var(--c-primary);
-  pointer-events: none;
-}
-.hud-corner.tl {
-  top: 4px;
-  left: 4px;
-  border-top: 2px solid;
-  border-left: 2px solid;
-}
-.hud-corner.tr {
-  top: 4px;
-  right: 4px;
-  border-top: 2px solid;
-  border-right: 2px solid;
-}
-.hud-corner.bl {
-  bottom: 4px;
-  left: 4px;
-  border-bottom: 2px solid;
-  border-left: 2px solid;
-}
-.hud-corner.br {
-  bottom: 4px;
-  right: 4px;
-  border-bottom: 2px solid;
-  border-right: 2px solid;
-}
-
-/* ============================================================
-   Type utilities (semantic colors, glow scales w/ theme)
-   ============================================================ */
-
-.hud-label {
+.display {
   font-family: var(--font-display);
   font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--c-primary);
-  text-shadow: 0 0 calc(6px * var(--glow-mult)) color-mix(in oklab, var(--c-primary) 35%, transparent);
+  letter-spacing: -0.01em;
+  line-height: 1;
 }
 
-.hud-value-primary {
-  color: var(--c-primary);
-  text-shadow: 0 0 calc(12px * var(--glow-mult)) color-mix(in oklab, var(--c-primary) 50%, transparent);
-}
-.hud-value-secondary {
-  color: var(--c-secondary);
-  text-shadow: 0 0 calc(12px * var(--glow-mult)) color-mix(in oklab, var(--c-secondary) 50%, transparent);
-}
-.hud-value-ok {
-  color: var(--c-ok);
-  text-shadow: 0 0 calc(10px * var(--glow-mult)) color-mix(in oklab, var(--c-ok) 40%, transparent);
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
-.hud-pulse-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--c-ok);
-  box-shadow: 0 0 calc(8px * var(--glow-mult)) var(--c-ok);
-  animation: hud-pulse 1.6s ease-in-out infinite;
-}
-.hud-pulse-dot.warn {
-  background: var(--c-warn);
-  box-shadow: 0 0 calc(8px * var(--glow-mult)) var(--c-warn);
-}
-.hud-pulse-dot.err {
-  background: var(--c-err);
-  box-shadow: 0 0 calc(8px * var(--glow-mult)) var(--c-err);
+.tnum {
+  font-variant-numeric: tabular-nums;
 }
 
-@keyframes hud-pulse {
-  0%,
-  100% {
-    opacity: 0.4;
-    transform: scale(0.85);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.15);
-  }
+.muted {
+  color: var(--ink-2);
 }
 
-@keyframes hud-flicker {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  47% {
-    opacity: 1;
-  }
-  48% {
-    opacity: 0.6;
-  }
-  49% {
-    opacity: 1;
-  }
-}
-.hud-flicker {
-  animation: hud-flicker 7s linear infinite;
+.dim {
+  color: var(--ink-3);
 }
 
-@keyframes hud-sweep {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(200%);
-  }
-}
-.hud-sweep {
-  position: relative;
+.truncate {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.hud-sweep::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in oklab, var(--c-primary) 18%, transparent),
-    transparent
-  );
-  animation: hud-sweep 6s linear infinite;
-  pointer-events: none;
-  will-change: transform;
+
+.tone-ok {
+  color: var(--ok);
+}
+.tone-warn {
+  color: var(--warn);
+}
+.tone-crit {
+  color: var(--crit);
 }
 
 /* ============================================================
-   Honor prefers-reduced-motion globally
+   Panel
+   ============================================================ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-panel);
+  overflow: hidden;
+}
+
+.panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.1rem 0.55rem;
+  flex: none;
+}
+
+.panel > header h2 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.panel-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.panel-meta strong {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.panel > .body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 1.1rem 1rem;
+}
+
+.panel > .body.flush {
+  padding: 0;
+}
+
+/* ============================================================
+   Status dot, pills, legend swatches
+   ============================================================ */
+
+.dot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--ink-3);
+  flex: none;
+}
+.dot.ok {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+.dot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px var(--warn-soft);
+}
+.dot.crit {
+  background: var(--crit);
+  box-shadow: 0 0 0 3px var(--crit-soft);
+}
+.dot.off {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ink-3);
+}
+.dot.pulse {
+  animation: dot-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.pill.ok {
+  color: var(--ok);
+  border-color: color-mix(in oklab, var(--ok) 45%, transparent);
+  background: var(--ok-soft);
+}
+.pill.warn {
+  color: var(--warn);
+  border-color: color-mix(in oklab, var(--warn) 45%, transparent);
+  background: var(--warn-soft);
+}
+.pill.crit {
+  color: var(--crit);
+  border-color: color-mix(in oklab, var(--crit) 45%, transparent);
+  background: var(--crit-soft);
+}
+.pill.accent {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  flex: none;
+}
+.swatch.rx {
+  background: var(--rx);
+}
+.swatch.tx {
+  background: var(--tx);
+}
+
+/* Direction glyphs carry the series color so the number beside them can
+   stay in ink. */
+.glyph {
+  font-size: 0.7em;
+  vertical-align: 0.12em;
+  margin-right: 0.15em;
+}
+.glyph.rx {
+  color: var(--rx);
+}
+.glyph.tx {
+  color: var(--tx);
+}
+
+/* ============================================================
+   Rows (table-like lists built with grid)
+   ============================================================ */
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.rows > .row {
+  display: grid;
+  align-items: center;
+  gap: 0 1rem;
+  padding: 0.5rem 0.5rem;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+
+.rows > .row.head {
+  border-top: none;
+  padding-top: 0.1rem;
+  padding-bottom: 0.4rem;
+}
+
+.rows > .row.head > * {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.rows > .row.dimmed {
+  opacity: 0.55;
+}
+
+.cell-name {
+  font-weight: 600;
+  color: var(--ink);
+  min-width: 0;
+}
+
+.cell-sub {
+  font-size: 0.74rem;
+  color: var(--ink-3);
+  min-width: 0;
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.num .unit {
+  color: var(--ink-3);
+  font-size: 0.74em;
+  margin-left: 0.25em;
+}
+
+.right {
+  text-align: right;
+}
+
+/* ============================================================
+   Page stage
+   ============================================================ */
+
+.stage {
+  position: relative;
+  min-height: 0;
+}
+
+.page {
+  position: absolute;
+  inset: 0;
+  padding: 0 1.25rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 500ms ease;
+}
+
+.page.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+  height: 100%;
+  min-height: 0;
+}
+
+.empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-height: 4rem;
+  padding: 1rem;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.empty strong {
+  display: block;
+  color: var(--ink-2);
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+
+/* ============================================================
+   Motion
    ============================================================ */
 
 @media (prefers-reduced-motion: reduce) {
-  .hud-sweep::after,
-  .hud-flicker,
-  .hud-pulse-dot {
+  .dot.pulse {
     animation: none !important;
+  }
+  .page {
+    transition: none;
   }
 }
