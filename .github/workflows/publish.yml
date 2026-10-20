@@ -6,8 +6,9 @@ on:
 
 jobs:
   publish:
-    # salt-808 publishes to apt.808.org from ubuntu-latest, so the cloud
-    # runner can reach the repo. Switch this to your self-hosted runner
+    # salt-808 publishes from ubuntu-latest through hoth's Cloudflare tunnel
+    # (apt-upload.808.org, HTTPS); the public apt.808.org :80 forward is
+    # read-only and answers 403 to uploads. Switch this to your self-hosted runner
     # label (e.g. [self-hosted, linux]) if you'd rather build on-fleet.
     runs-on: ubuntu-latest
     steps:
@@ -39,4 +40,4 @@ jobs:
         run: |
           curl -f -H "Authorization: Bearer ${{ secrets.REPO_API_KEY }}" \
             --upload-file build/panel_${{ steps.version.outputs.ver }}_all.deb \
-            http://apt.808.org/upload/panel_${{ steps.version.outputs.ver }}_all.deb
+            https://apt-upload.808.org/upload/panel_${{ steps.version.outputs.ver }}_all.deb

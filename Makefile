@@ -9,14 +9,14 @@
 #   make clean
 #
 # Environment:
-#   REPO_URL     — upload endpoint (default: http://apt.808.org/upload)
+#   REPO_URL     — upload endpoint (default: https://apt-upload.808.org/upload)
 #   REPO_API_KEY — bearer token for upload auth (required for publish)
 #
 # Output lands in build/:
 #   build/panel_<version>_all.deb
 
 VERSION   ?= $(shell date +%Y%m%d.%H%M%S)
-REPO_URL  ?= http://apt.808.org/upload
+REPO_URL  ?= https://apt-upload.808.org/upload
 PKG       := panel
 BUILD_DIR := build
 STAGE     := $(BUILD_DIR)/$(PKG)_$(VERSION)_all
