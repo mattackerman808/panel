@@ -149,22 +149,32 @@ class PanelStore {
 
 export const panel = new PanelStore();
 
+/** Holds the WS open while the page is visible. A hidden tab drops the
+ *  socket and reconnects on return: browsers freeze background tabs and then
+ *  deliver every queued tick at once, which replays minutes of data at high
+ *  speed. A fresh snapshot carries the same histories in one step. */
 export function connectWs(): () => void {
   let ws: WebSocket | null = null;
   let reconnectDelay = 1000;
   let closed = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+  const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
+
   function open() {
-    if (closed) return;
+    if (closed || hidden()) return;
     panel.connection = 'connecting';
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${proto}//${location.host}/ws`);
-    ws.addEventListener('open', () => {
+    const sock = new WebSocket(`${proto}//${location.host}/ws`);
+    ws = sock;
+    sock.addEventListener('open', () => {
+      if (ws !== sock) return;
       panel.connection = 'open';
       reconnectDelay = 1000;
     });
-    ws.addEventListener('message', (ev) => {
+    sock.addEventListener('message', (ev) => {
+      // Messages already queued on a socket we dropped are stale.
+      if (ws !== sock) return;
       try {
         const msg = JSON.parse(ev.data) as WsMessage;
         if (msg.type === 'snapshot') panel.applySnapshot(msg.data);
@@ -173,22 +183,42 @@ export function connectWs(): () => void {
         console.error('[ws] parse error', err);
       }
     });
-    ws.addEventListener('close', () => {
+    sock.addEventListener('close', () => {
+      if (ws !== sock) return;
+      ws = null;
       panel.connection = 'closed';
-      if (closed) return;
+      if (closed || hidden()) return;
       reconnectTimer = setTimeout(open, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 1.6, 10_000);
     });
-    ws.addEventListener('error', () => {
+    sock.addEventListener('error', () => {
+      if (ws !== sock) return;
       panel.connection = 'error';
     });
   }
+
+  function drop() {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    const sock = ws;
+    ws = null;
+    sock?.close();
+  }
+
+  const onVisibility = () => {
+    if (hidden()) drop();
+    else if (!ws) {
+      reconnectDelay = 1000;
+      open();
+    }
+  };
+  document.addEventListener('visibilitychange', onVisibility);
 
   open();
 
   return () => {
     closed = true;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    ws?.close();
+    document.removeEventListener('visibilitychange', onVisibility);
+    drop();
   };
 }
