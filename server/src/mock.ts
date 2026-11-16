@@ -904,7 +904,13 @@ function createMockEnergy() {
     const b = Math.floor(t / 900_000);
     const appliance = hash(b * 71 + 3) < 0.18 ? 1_500 + 2_000 * hash(b * 71 + 4) : 0;
     const k = 1 + 0.06 * jitter(t, 812, 5_000);
-    return { base: (620 + bump(7.8, 1.2, 1_100) + bump(19, 2.2, 2_300)) * k, appliance: appliance * k };
+    return { base: (620 + bump(7.8, 1.2, 1_100) + bump(19, 2.2, 2_300)) * k + cabinetW(t), appliance: appliance * k };
+  }
+
+  /** The server cabinet behind the rack UPS: ~700 W, always on, inside the
+   *  Subpanel circuit (so PANEL_UPS_CIRCUIT=Subpanel has something to split). */
+  function cabinetW(t: number): number {
+    return 690 + 40 * Math.sin(t / 900_000) + 10 * jitter(t, 817, 15_000);
   }
 
   function homeW(t: number): number {
@@ -1031,6 +1037,8 @@ function createMockEnergy() {
     const h = localHour(t);
     const weights = CIRCUITS.map((c) => c.weight(h));
     const total = weights.reduce((a, b) => a + b, 0);
+    const cabinet = cabinetW(t);
+    const spread = parts.base - cabinet;
     // Today's per-circuit energy: today's home energy split by each
     // circuit's day-average weight (good enough for a mock).
     const homeToday = integrate(label(new Date(t)), midnight(t), t - (t % 60_000)).homeWh;
@@ -1044,7 +1052,7 @@ function createMockEnergy() {
       id: c.id,
       name: c.name,
       spaces: c.spaces,
-      powerW: Math.round((parts.base * (1 - UNMETERED) * weights[i]!) / total + (c.id === 'c-laundry' ? parts.appliance : 0)),
+      powerW: Math.round((spread * (1 - UNMETERED) * weights[i]!) / total + (c.id === 'c-laundry' ? parts.appliance : 0) + (c.id === 'c-sub' ? cabinet : 0)),
       ratingA: c.ratingA,
       relay: 'CLOSED',
       source: false,

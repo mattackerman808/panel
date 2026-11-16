@@ -1,37 +1,29 @@
 <script lang="ts">
   import { panel } from '$lib/store.svelte';
-  import { deriveFlow } from '$lib/derive';
-  import { kwh, num, relativeTime, watts } from '$lib/format';
+  import { circuitRows } from '$lib/derive';
+  import { kwh, num, relativeTime } from '$lib/format';
   import type { RankedRow } from '$lib/ui';
   import Panel from '$lib/components/Panel.svelte';
   import Stat from '$lib/components/Stat.svelte';
   import Meter from '$lib/components/Meter.svelte';
   import RankedBars from '$lib/components/RankedBars.svelte';
-  import EnergySankey from '$lib/components/EnergySankey.svelte';
+  import CircuitFlow from '$lib/components/CircuitFlow.svelte';
 
-  /** The whole house in one picture: where the power comes from (solar,
-   *  Powerwall, grid) and which SPAN circuits it goes to, plus every
-   *  circuit ranked and the electrical service at the main lugs. */
+  /** The Now page's power flow carried through the SPAN panel to every
+   *  circuit (live draw, today's energy, breaker load), with today's energy
+   *  ranked by circuit and the electrical service at the main lugs. */
   let { active = true }: { active?: boolean } = $props();
 
   const span = $derived(panel.span);
   const configured = $derived(panel.features.spanAvailable);
   const live = $derived(!!span && span.reachable);
-  const flow = $derived(deriveFlow(panel.powerwall, span));
-  const loads = $derived((span?.circuits ?? []).filter((c) => !c.source));
-  const rows = $derived<RankedRow[]>(
-    loads
-      .slice()
-      .sort((a, b) => b.powerW - a.powerW)
-      .map((c) => ({
-        id: c.id,
-        label: c.name,
-        sub: [c.todayWh != null ? `${kwh(c.todayWh)} today` : null, c.ratingA ? `${c.ratingA} A` : null, c.relay === 'OPEN' ? 'off' : null]
-          .filter(Boolean)
-          .join(' · '),
-        value: Math.max(0, c.powerW),
-        text: watts(Math.max(0, c.powerW)),
-      })),
+  const rows = $derived(circuitRows(span, panel.powerwall, { ups: panel.ups, upsCircuit: panel.ui.upsCircuit ?? null }));
+  const today = $derived<RankedRow[]>(
+    (span?.circuits ?? [])
+      .filter((c) => !c.source && c.todayWh != null && c.todayWh > 0)
+      .sort((a, b) => (b.todayWh ?? 0) - (a.todayWh ?? 0))
+      .slice(0, 10)
+      .map((c) => ({ id: c.id, label: c.name, value: c.todayWh ?? 0, text: kwh(c.todayWh).replace(' kWh', ''), unit: 'kWh' })),
   );
   const legTone = (a: number | null) => {
     const r = span?.serviceRatingA ?? 0;
@@ -54,21 +46,21 @@
   </div>
 {:else}
   <div class="circuits" data-active={active}>
-    <Panel title="Where the power goes" tone={live ? 'none' : 'warn'} class="flow-panel">
+    <Panel title="Circuits" tone={live ? 'none' : 'warn'} class="flow-panel">
       {#snippet meta()}
-        <span>sources → panel → circuits</span>
+        <span>live draw · today · breaker load</span>
         <span>{live ? `updated ${relativeTime(span.updatedAt)}` : 'SPAN not publishing'}</span>
       {/snippet}
-      {#if flow}
-        <EnergySankey {flow} busLabel="SPAN panel" />
-      {:else}
-        <div class="empty">No power readings yet</div>
-      {/if}
+      <CircuitFlow pw={panel.powerwall} {span} {rows} {active} />
     </Panel>
 
-    <Panel title="Circuits">
-      {#snippet meta()}<span>{loads.length} circuits · live draw</span>{/snippet}
-      <RankedBars {rows} dense color="var(--home)" />
+    <Panel title="Today by circuit">
+      {#snippet meta()}<span>since midnight</span>{/snippet}
+      {#if today.length}
+        <RankedBars rows={today} dense color="var(--home)" />
+      {:else}
+        <div class="empty">Circuit totals start after the first readings</div>
+      {/if}
     </Panel>
 
     <Panel title="Service">
@@ -94,7 +86,7 @@
   }
   .circuits {
     display: grid;
-    grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
     gap: 1rem;
     height: 100%;
