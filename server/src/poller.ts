@@ -18,6 +18,7 @@ import type {
   WanStatus,
 } from './types.js';
 import { EnergyLedger, PowerwallClient } from './powerwall.js';
+import { SpanClient } from './span.js';
 import { UpsClient } from './ups.js';
 import { type GatewayWanDetails, UnifiClient } from './unifi.js';
 
@@ -149,6 +150,7 @@ export async function startPoller(): Promise<void> {
       upsAvailable: config.ups.enabled,
       controllerAvailable: unifiOk,
       powerwallAvailable: config.powerwall.enabled,
+      spanAvailable: config.span.enabled,
     });
   };
   publishFeatures(false);
@@ -188,6 +190,16 @@ export async function startPoller(): Promise<void> {
   if (powerwallClient && ledger) {
     console.log(`[poller] Powerwall enabled at ${config.powerwall.host}`);
     store.seedEnergy(ledger.history(), ledger.daily());
+  }
+
+  // === SPAN panel (optional). Event-driven over MQTT; it connects and
+  //     reconnects on its own, and each tick just reads its current view. ===
+  const spanClient = config.span.enabled
+    ? new SpanClient({ host: config.span.host, passphrase: config.span.passphrase, clientName: config.span.clientName })
+    : null;
+  if (spanClient) {
+    console.log(`[poller] SPAN enabled at ${config.span.host}`);
+    spanClient.start();
   }
 
   // === SNMP setup ===
@@ -658,6 +670,7 @@ export async function startPoller(): Promise<void> {
       powerwall: lastPowerwall ?? undefined,
       powerwallSample: powerwallSample ?? undefined,
       energyDaily,
+      span: spanClient?.info() ?? undefined,
     });
     usageDailyOut = null;
     powerwallSample = null;
@@ -690,6 +703,7 @@ async function startMockPoller(): Promise<void> {
     upsAvailable: true,
     controllerAvailable: true,
     powerwallAvailable: true,
+    spanAvailable: true,
   });
   world.seedEvents((e) => store.recordEvent(e));
 
@@ -720,7 +734,7 @@ async function startMockPoller(): Promise<void> {
         ...(usageDue ? { usageDaily: world.usageDaily(t) } : {}),
         ...(clientsDue ? { clients: world.clients(t), dpi: apps, dpiCategories: categories } : {}),
         ...(slow ? { devices: world.devices(t), udm: world.udm(t), health: world.health(wans, t), ups: world.ups(t) } : {}),
-        ...(powerwallDue ? { powerwall: world.powerwall(t) } : {}),
+        ...(powerwallDue ? { powerwall: world.powerwall(t), span: world.span(t) } : {}),
         ...(minuteClosed ? { powerwallSample: world.powerwallSample(closedMinute), energyDaily: world.energyDaily(t) } : {}),
       },
       t,

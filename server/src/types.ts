@@ -383,6 +383,46 @@ export type PowerwallSample = {
   chargePct: number | null;
 };
 
+/** One breaker position on a SPAN panel. */
+export type SpanCircuit = {
+  /** Opaque eBus device id (stable per circuit). */
+  id: string;
+  name: string;
+  /** Breaker spaces, e.g. "2,4" for a two-pole. */
+  spaces: string;
+  /** Live draw in watts, positive = consuming. (SPAN publishes loads as
+   *  negative active power; normalized here.) */
+  powerW: number;
+  ratingA: number | null;
+  relay: 'OPEN' | 'CLOSED' | 'UNKNOWN';
+  /** A circuit that mostly feeds the panel (a battery or inverter backfeed
+   *  breaker). Excluded from loads so storage/solar isn't counted twice. */
+  source: boolean;
+  /** Energy consumed so far in the local day, Wh (null until baselined). */
+  todayWh: number | null;
+};
+
+/** A SPAN smart panel, normalized from its local eBus/MQTT tree. Site
+ *  identity the panel publishes (street address, coordinates) is
+ *  deliberately not carried. */
+export type SpanInfo = {
+  reachable: boolean;
+  model: string | null;
+  firmware: string | null;
+  /** Utility feed at the main lugs, W: + importing / − exporting. */
+  gridW: number | null;
+  /** Per-leg line voltage and service current. */
+  voltageA: number | null;
+  voltageB: number | null;
+  currentA: number | null;
+  currentB: number | null;
+  serviceRatingA: number | null;
+  frequencyHz: number | null;
+  doorClosed: boolean | null;
+  circuits: SpanCircuit[];
+  updatedAt: number;
+};
+
 export type EventSeverity = 'info' | 'warn' | 'crit';
 
 /** A state change the server noticed (device offline, WAN down, UPS on
@@ -408,6 +448,8 @@ export type Features = {
   controllerAvailable: boolean;
   /** A Powerwall gateway is configured (POWERWALL_HOST). */
   powerwallAvailable: boolean;
+  /** A SPAN panel is configured (SPAN_HOST). */
+  spanAvailable: boolean;
 };
 
 export type UiConfig = {
@@ -449,6 +491,7 @@ export type Snapshot = {
   powerwallHistory: PowerwallSample[];
   /** Trailing ~31 days of daily energy totals, oldest first (today last). */
   energyDaily: EnergyDay[];
+  span: SpanInfo | null;
   events: PanelEvent[];
   features: Features;
 };
@@ -471,6 +514,7 @@ export type Tick = {
   powerwall?: PowerwallInfo;
   powerwallSample?: PowerwallSample;
   energyDaily?: EnergyDay[];
+  span?: SpanInfo;
   /** Events raised during this tick (already appended to the log). */
   events?: PanelEvent[];
   /** Sent whenever a subsystem comes up or goes away. */

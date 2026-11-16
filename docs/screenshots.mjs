@@ -20,7 +20,7 @@ const only = process.argv[4] ?? '';
 // energy.* hostname selects it).
 const SHOTS = [
   ...['overview', 'internet', 'wired', 'wireless', 'clients', 'topology', 'power'].map((id) => [id, `start=${id}`]),
-  ...['energy', 'today', 'history'].map((id) => [id === 'energy' ? 'energy-now' : `energy-${id}`, `view=energy&start=${id}`]),
+  ...['energy', 'circuits', 'today', 'history'].map((id) => [id === 'energy' ? 'energy-now' : `energy-${id}`, `view=energy&start=${id}`]),
 ].filter(([name]) => name.includes(only));
 mkdirSync(out, { recursive: true });
 

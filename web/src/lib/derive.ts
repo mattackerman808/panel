@@ -1,6 +1,6 @@
 import { buildTopology, type TopoEdge } from './topology.js';
 import { bps, pct, shortName } from './format.js';
-import type { Band, ClientStat, DeviceType, EnergyDay, NetworkDevice, PowerwallInfo, UpsInfo, Wan, Features, EventSeverity } from './types.js';
+import type { Band, ClientStat, DeviceType, EnergyDay, NetworkDevice, PowerwallInfo, SpanInfo, UpsInfo, Wan, Features, EventSeverity } from './types.js';
 
 /** Pure derivations over the snapshot: what needs attention, fleet rollups,
  *  link utilization. Kept out of the components so the thresholds live in one
@@ -152,6 +152,7 @@ function finalizeAlerts(out: Alert[]): Alert[] {
 
 export type EnergyAlertInput = {
   powerwall: PowerwallInfo | null;
+  span?: SpanInfo | null;
   ups: UpsInfo | null;
   features: Features;
   connection: string;
@@ -175,8 +176,61 @@ export function deriveEnergyAlerts(s: EnergyAlertInput): Alert[] {
       else if (p.chargePct != null && p.chargePct < THRESHOLDS.powerwallChargeWarnPct) add('warn', 'Powerwall', `charge ${pct(p.chargePct)}`, 'energy');
     }
   }
+  if (s.features.spanAvailable && s.connection === 'open') {
+    if (!s.span || !s.span.reachable) add('warn', 'SPAN', 'panel not publishing', 'circuits');
+    else for (const c of s.span.circuits) if (c.relay === 'OPEN') add('warn', c.name, 'circuit switched off', 'circuits');
+  }
   if (s.features.upsAvailable) upsAlerts(s.ups, add);
   return finalizeAlerts(out);
+}
+
+// --- whole-home power flow (sources → panel → circuits) ---
+
+export type FlowNode = { key: string; label: string; watts: number; color: string; detail?: string };
+export type Flow = { sources: FlowNode[]; sinks: FlowNode[]; inW: number; outW: number };
+
+/** Below this a flow isn't drawn (meter noise, idle inverters). */
+const FLOW_MIN_W = 15;
+
+/** Where the home's power comes from and where it goes, for the Sankey.
+ *  Sources and the grid/battery sinks come from the Powerwall (its four
+ *  meters balance); the load side is broken out by SPAN circuit. Circuits
+ *  that feed the panel (the Powerwall's backfeed breaker) are skipped so
+ *  storage isn't counted twice, and any gap between the Powerwall's home
+ *  total and the circuit sum is shown as "Unmetered" rather than hidden.
+ *  Past `maxCircuits`, the smallest circuits fold into one "Other" sink. */
+export function deriveFlow(pw: PowerwallInfo | null, span: SpanInfo | null, maxCircuits = 8): Flow | null {
+  const gridW = pw?.gridW ?? span?.gridW ?? null;
+  if (gridW == null) return null;
+  const solar = pw?.solarW ?? 0;
+  const battery = pw?.batteryW ?? 0;
+  const sources: FlowNode[] = [
+    { key: 'solar', label: 'Solar', watts: solar, color: 'var(--solar)' },
+    { key: 'battery', label: 'Powerwall', watts: Math.max(0, battery), color: 'var(--battery)', detail: 'discharging' },
+    { key: 'grid', label: 'Grid', watts: Math.max(0, gridW), color: 'var(--grid)', detail: 'importing' },
+  ].filter((n) => n.watts >= FLOW_MIN_W);
+
+  const sinks: FlowNode[] = [];
+  const loads = (span?.reachable ? span.circuits : []).filter((c) => !c.source && c.powerW >= FLOW_MIN_W).sort((a, b) => b.powerW - a.powerW);
+  const shown = loads.length > maxCircuits + 1 ? loads.slice(0, maxCircuits) : loads;
+  const rest = loads.slice(shown.length);
+  for (const c of shown) sinks.push({ key: `c:${c.id}`, label: c.name, watts: c.powerW, color: 'var(--home)' });
+  if (rest.length) {
+    sinks.push({ key: 'c:other', label: `${rest.length} other circuits`, watts: rest.reduce((a, c) => a + c.powerW, 0), color: 'var(--home)' });
+  }
+  const metered = loads.reduce((a, c) => a + c.powerW, 0);
+  const home = pw?.homeW ?? (span?.reachable ? metered : 0);
+  if (loads.length === 0 && home >= FLOW_MIN_W) sinks.push({ key: 'home', label: 'Home', watts: home, color: 'var(--home)' });
+  else if (home - metered >= FLOW_MIN_W * 4) sinks.push({ key: 'unmetered', label: 'Unmetered', watts: home - metered, color: 'var(--ink-3)', detail: 'home total minus circuits' });
+  if (battery <= -FLOW_MIN_W) sinks.push({ key: 'charge', label: 'Powerwall', watts: -battery, color: 'var(--battery)', detail: 'charging' });
+  if (gridW <= -FLOW_MIN_W) sinks.push({ key: 'export', label: 'Grid', watts: -gridW, color: 'var(--grid)', detail: 'exporting' });
+
+  return {
+    sources,
+    sinks,
+    inW: sources.reduce((a, n) => a + n.watts, 0),
+    outW: sinks.reduce((a, n) => a + n.watts, 0),
+  };
 }
 
 /** Direction words for a signed flow, so the UI never relies on a sign or

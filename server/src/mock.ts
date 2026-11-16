@@ -12,6 +12,8 @@ import type {
   NetworkRadio,
   PowerwallInfo,
   PowerwallSample,
+  SpanCircuit,
+  SpanInfo,
   UdmInfo,
   UpsInfo,
   Wan,
@@ -893,14 +895,21 @@ function createMockEnergy() {
     return Math.round(7_800 * sun * weather * cloud);
   }
 
-  function homeW(t: number): number {
+  /** Home load split into the steady part and an appliance run (a 15-minute
+   *  bucket sometimes adds 1.5–3.5 kW) — the SPAN mock puts the latter on
+   *  its laundry circuit. */
+  function homeParts(t: number): { base: number; appliance: number } {
     const h = localHour(t);
     const bump = (center: number, width: number, amp: number) => amp * Math.exp(-Math.pow((h - center) / width, 2));
-    // Appliances: a 15-minute bucket sometimes runs an extra 1.5–3.5 kW.
     const b = Math.floor(t / 900_000);
     const appliance = hash(b * 71 + 3) < 0.18 ? 1_500 + 2_000 * hash(b * 71 + 4) : 0;
-    const base = 620 + bump(7.8, 1.2, 1_100) + bump(19, 2.2, 2_300) + appliance;
-    return Math.round(base * (1 + 0.06 * jitter(t, 812, 5_000)));
+    const k = 1 + 0.06 * jitter(t, 812, 5_000);
+    return { base: (620 + bump(7.8, 1.2, 1_100) + bump(19, 2.2, 2_300)) * k, appliance: appliance * k };
+  }
+
+  function homeW(t: number): number {
+    const p = homeParts(t);
+    return Math.round(p.base + p.appliance);
   }
 
   function islanded(t: number): boolean {
@@ -998,5 +1007,77 @@ function createMockEnergy() {
     return out;
   }
 
-  return { powerwall, powerwallSample, powerwallHistory, energyDaily };
+  /** SPAN circuits: the home's steady load split by time-of-day weights,
+   *  appliance runs on Laundry, ~3% left unmetered, and a Powerwall
+   *  backfeed breaker carrying solar + battery into the panel. */
+  const CIRCUITS: Array<{ id: string; name: string; spaces: string; ratingA: number; weight: (h: number) => number }> = [];
+  const bumpAt = (h: number, c: number, w: number) => Math.exp(-Math.pow((h - c) / w, 2));
+  CIRCUITS.push(
+    { id: 'c-sub', name: 'Subpanel', spaces: '2,4', ratingA: 100, weight: () => 0.34 },
+    { id: 'c-hvac', name: 'Heat pump', spaces: '22,24', ratingA: 30, weight: (h) => 0.04 + 0.22 * bumpAt(h, 15, 3) + 0.12 * bumpAt(h, 20, 2) },
+    { id: 'c-kit', name: 'Kitchen', spaces: '18', ratingA: 20, weight: (h) => 0.05 + 0.18 * bumpAt(h, 7.8, 0.8) + 0.22 * bumpAt(h, 18.5, 1) },
+    { id: 'c-oven', name: 'Oven & range', spaces: '13,15', ratingA: 40, weight: (h) => 0.2 * bumpAt(h, 18.2, 0.6) },
+    { id: 'c-light', name: 'Lighting', spaces: '6', ratingA: 20, weight: (h) => 0.03 + 0.1 * bumpAt(h, 20.5, 2.5) },
+    { id: 'c-office', name: 'Office', spaces: '9', ratingA: 20, weight: (h) => 0.03 + 0.08 * bumpAt(h, 13, 4) },
+    { id: 'c-bed', name: 'Bedrooms', spaces: '20', ratingA: 20, weight: (h) => 0.05 + 0.04 * bumpAt(h, 22, 2) },
+    { id: 'c-garage', name: 'Garage', spaces: '19', ratingA: 20, weight: () => 0.025 },
+    { id: 'c-laundry', name: 'Laundry', spaces: '17', ratingA: 30, weight: () => 0.004 },
+  );
+  const UNMETERED = 0.03;
+
+  function span(t: number): SpanInfo {
+    const f = flows(t);
+    const parts = homeParts(t);
+    const h = localHour(t);
+    const weights = CIRCUITS.map((c) => c.weight(h));
+    const total = weights.reduce((a, b) => a + b, 0);
+    // Today's per-circuit energy: today's home energy split by each
+    // circuit's day-average weight (good enough for a mock).
+    const homeToday = integrate(label(new Date(t)), midnight(t), t - (t % 60_000)).homeWh;
+    const dayAvg = CIRCUITS.map((c) => {
+      let a = 0;
+      for (let k = 0; k < 24; k++) a += c.weight(k + 0.5);
+      return a / 24;
+    });
+    const dayTotal = dayAvg.reduce((a, b) => a + b, 0);
+    const circuits: SpanCircuit[] = CIRCUITS.map((c, i) => ({
+      id: c.id,
+      name: c.name,
+      spaces: c.spaces,
+      powerW: Math.round((parts.base * (1 - UNMETERED) * weights[i]!) / total + (c.id === 'c-laundry' ? parts.appliance : 0)),
+      ratingA: c.ratingA,
+      relay: 'CLOSED',
+      source: false,
+      todayWh: Math.round((homeToday * (1 - UNMETERED) * dayAvg[i]!) / dayTotal),
+    }));
+    circuits.push({
+      id: 'c-pw',
+      name: 'Powerwall',
+      spaces: '5,7',
+      powerW: -(f.solarW + f.batteryW),
+      ratingA: 60,
+      relay: 'CLOSED',
+      source: true,
+      todayWh: null,
+    });
+    circuits.sort((a, b) => b.powerW - a.powerW);
+    const amps = Math.abs(f.gridW) / 240;
+    return {
+      reachable: true,
+      model: 'MLO_24',
+      firmware: 'spanos3/mock',
+      gridW: f.gridW,
+      voltageA: Math.round((120.8 + 0.4 * jitter(t, 815, 10_000)) * 10) / 10,
+      voltageB: Math.round((121.0 + 0.4 * jitter(t, 816, 10_000)) * 10) / 10,
+      currentA: Math.round(amps * 1.04 * 10) / 10,
+      currentB: Math.round(amps * 0.96 * 10) / 10,
+      serviceRatingA: 200,
+      frequencyHz: 60 + 0.02 * jitter(t, 814, 10_000),
+      doorClosed: true,
+      circuits,
+      updatedAt: t,
+    };
+  }
+
+  return { powerwall, powerwallSample, powerwallHistory, energyDaily, span };
 }

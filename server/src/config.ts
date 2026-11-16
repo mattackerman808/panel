@@ -94,6 +94,18 @@ export const config = {
     // Name shown on the energy kiosk's top bar.
     siteName: process.env.PANEL_ENERGY_SITE_NAME ?? process.env.PANEL_SITE_NAME ?? 'Home',
   },
+  // SPAN smart panel over its local v2 API. Disabled unless SPAN_HOST is
+  // set. SPAN_PASSPHRASE comes from the SPAN Home app (On-premise settings
+  // → Local network) and is the panel's MQTT broker password; the server
+  // streams the panel's eBus tree with it. Personal, non-commercial,
+  // LAN-only use per SPAN's terms.
+  span: {
+    enabled: !!process.env.SPAN_HOST,
+    host: process.env.SPAN_HOST ?? '',
+    passphrase: process.env.SPAN_PASSPHRASE ?? '',
+    // MQTT client id prefix (the broker wants one per connection).
+    clientName: process.env.SPAN_CLIENT_NAME ?? 'panel',
+  },
   snmp: {
     community: process.env.UDM_SNMP_COMMUNITY ?? 'public',
     port: num(process.env.UDM_SNMP_PORT, 161),

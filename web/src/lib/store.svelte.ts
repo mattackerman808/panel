@@ -12,6 +12,7 @@ import type {
   PowerwallInfo,
   PowerwallSample,
   Snapshot,
+  SpanInfo,
   Tick,
   UdmInfo,
   UiConfig,
@@ -36,6 +37,7 @@ const DEFAULT_FEATURES: Features = {
   upsAvailable: false,
   controllerAvailable: false,
   powerwallAvailable: false,
+  spanAvailable: false,
 };
 
 const DEFAULT_UI: UiConfig = { siteName: 'Network', pages: null, dwellMs: 24_000 };
@@ -70,6 +72,7 @@ class PanelStore {
   powerwallHistory = $state<PowerwallSample[]>([]);
   /** Daily energy totals, oldest first. */
   energyDaily = $state<EnergyDay[]>([]);
+  span = $state<SpanInfo | null>(null);
   /** Newest first. */
   events = $state<PanelEvent[]>([]);
   features = $state<Features>(DEFAULT_FEATURES);
@@ -109,6 +112,7 @@ class PanelStore {
     this.powerwall = s.powerwall ?? null;
     this.powerwallHistory = tail(s.powerwallHistory ?? [], MAX_POWERWALL_HISTORY);
     this.energyDaily = s.energyDaily ?? [];
+    this.span = s.span ?? null;
     this.events = (s.events ?? []).slice(0, MAX_EVENTS);
     this.features = { ...DEFAULT_FEATURES, ...(s.features ?? {}) };
     this.lastTickAt = s.ts;
@@ -126,6 +130,7 @@ class PanelStore {
     if (t.ups) this.ups = t.ups;
     if (t.powerwall) this.powerwall = t.powerwall;
     if (t.energyDaily) this.energyDaily = t.energyDaily;
+    if (t.span) this.span = t.span;
     if (t.powerwallSample) this.powerwallHistory = tail([...this.powerwallHistory, t.powerwallSample], MAX_POWERWALL_HISTORY);
     if (t.features) this.features = { ...DEFAULT_FEATURES, ...t.features };
 
