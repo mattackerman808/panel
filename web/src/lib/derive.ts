@@ -329,6 +329,63 @@ export function circuitRows(
   return rows;
 }
 
+/** A power source feeding the SPAN panel in the circuit flow. `watts` is
+ *  positive into the panel; export and Powerwall charging run negative. */
+export type FlowSource = {
+  key: 'solar' | 'grid' | 'battery';
+  label: string;
+  watts: number;
+  dir: string;
+  color: string;
+  idle: boolean;
+  /** The grid while islanded. */
+  off?: boolean;
+};
+
+/** Solar, grid and Powerwall as sources for the circuit flow (desktop
+ *  diagram and phone list alike). Without the Powerwall gateway only the
+ *  grid is known, from SPAN's main meter. */
+export function flowSources(pw: PowerwallInfo | null, span: SpanInfo): FlowSource[] {
+  const gridW = pw?.gridW ?? span.gridW ?? 0;
+  const list: FlowSource[] = [];
+  if (pw) list.push({ key: 'solar', label: 'Solar', watts: pw.solarW, dir: pw.solarW >= CIRCUIT_ACTIVE_W ? 'producing' : 'idle', color: 'var(--solar)', idle: pw.solarW < CIRCUIT_ACTIVE_W });
+  list.push({
+    key: 'grid',
+    label: 'Grid',
+    watts: gridW,
+    dir: pw?.grid === 'islanded' ? 'off grid' : gridDirection(gridW),
+    color: 'var(--grid)',
+    idle: Math.abs(gridW) < CIRCUIT_ACTIVE_W,
+    off: pw?.grid === 'islanded',
+  });
+  if (pw) list.push({ key: 'battery', label: 'Powerwall', watts: pw.batteryW, dir: batteryDirection(pw.batteryW), color: 'var(--battery)', idle: Math.abs(pw.batteryW) < CIRCUIT_ACTIVE_W });
+  return list;
+}
+
+/** Rank keys by value, largest first, with hysteresis: starting from the
+ *  previous order, an item only climbs past its neighbour when it beats it
+ *  by `ratio` and by `marginW` — so two loads trading places around the
+ *  same draw don't swap on every reading, while a kettle switching on
+ *  still jumps straight up. New keys enter at the bottom and climb; gone
+ *  keys drop out. With no previous order it is a plain stable sort. */
+export function stickyRank(
+  prev: readonly string[],
+  items: ReadonlyArray<{ key: string; watts: number }>,
+  opts: { ratio?: number; marginW?: number } = {},
+): string[] {
+  const ratio = opts.ratio ?? 1.25;
+  const margin = opts.marginW ?? 25;
+  const w = new Map(items.map((i) => [i.key, i.watts]));
+  if (prev.length === 0) return items.slice().sort((a, b) => b.watts - a.watts).map((i) => i.key);
+  const order = prev.filter((k) => w.has(k));
+  for (const i of items) if (!order.includes(i.key)) order.push(i.key);
+  const beats = (a: string, b: string) => w.get(a)! > w.get(b)! * ratio + margin;
+  for (let i = 1; i < order.length; i++) {
+    for (let j = i; j > 0 && beats(order[j]!, order[j - 1]!); j--) [order[j - 1], order[j]] = [order[j]!, order[j - 1]!];
+  }
+  return order;
+}
+
 /** Direction words for a signed flow, so the UI never relies on a sign or
  *  a color alone. */
 export function gridDirection(w: number): 'importing' | 'exporting' | 'idle' {

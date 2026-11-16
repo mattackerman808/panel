@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PowerwallInfo, SpanInfo } from '$lib/types';
-  import { batteryDirection, gridDirection, type CircuitRow } from '$lib/derive';
+  import { flowSources, type CircuitRow } from '$lib/derive';
   import { formatW, kwh, num } from '$lib/format';
 
   /** The Now page's power flow, carried through the SPAN panel to every
@@ -25,26 +25,8 @@
   const HUB = { x: 318, w: 116 };
   const CARD_X0 = 500;
   const CARD_X1 = 994;
-  const MIN_W = 15;
 
-  type Src = { key: 'solar' | 'grid' | 'battery'; label: string; watts: number; dir: string; color: string; idle: boolean; off?: boolean };
-
-  const sources = $derived.by<Src[]>(() => {
-    const gridW = pw?.gridW ?? span.gridW ?? 0;
-    const list: Src[] = [];
-    if (pw) list.push({ key: 'solar', label: 'Solar', watts: pw.solarW, dir: pw.solarW >= MIN_W ? 'producing' : 'idle', color: 'var(--solar)', idle: pw.solarW < MIN_W });
-    list.push({
-      key: 'grid',
-      label: 'Grid',
-      watts: gridW,
-      dir: pw?.grid === 'islanded' ? 'off grid' : gridDirection(gridW),
-      color: 'var(--grid)',
-      idle: Math.abs(gridW) < MIN_W,
-      off: pw?.grid === 'islanded',
-    });
-    if (pw) list.push({ key: 'battery', label: 'Powerwall', watts: pw.batteryW, dir: batteryDirection(pw.batteryW), color: 'var(--battery)', idle: Math.abs(pw.batteryW) < MIN_W });
-    return list;
-  });
+  const sources = $derived(flowSources(pw, span));
 
   const total = $derived(rows.reduce((a, r) => a + r.watts, 0));
 
