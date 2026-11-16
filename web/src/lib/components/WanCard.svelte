@@ -21,8 +21,10 @@
   const statusLabel = $derived(wan.status === 'ok' ? 'Up' : wan.status === 'degraded' ? 'Degraded' : wan.status === 'down' ? 'Down' : 'Unknown');
   const latTone = $derived(wan.latencyMs == null ? 'none' : wan.latencyMs >= 200 ? 'crit' : wan.latencyMs >= 80 ? 'warn' : 'none');
   const probes = $derived(
+    // Dedupe by the {#each} key: a duplicate key throws inside Svelte and
+    // freezes every page, and older servers can still send twins.
     wan.monitors
-      .filter((m) => m.latencyMs != null)
+      .filter((m, i, all) => m.latencyMs != null && all.findIndex((o) => o.type === m.type && o.target === m.target) === i)
       .map((m) => ({ ...m, label: m.target.replace(/^www\./, ''), kind: m.type.toUpperCase() })),
   );
 

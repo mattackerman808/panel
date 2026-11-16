@@ -869,7 +869,18 @@ function toHealthSubsystem(h: RawHealthSubsystem): HealthSubsystem {
     const want = (h.subsystem ?? '').toUpperCase();
     return stats[want] ?? Object.values(stats)[0] ?? null;
   })();
-  const monitors = [...(bucket?.alerting_monitors ?? []), ...(bucket?.monitors ?? [])].map(toProbe);
+  // A probe can be listed in both arrays (the controller has been seen to
+  // list ping.ui.com in each); keep the first, so an alerting entry wins
+  // over its healthy twin. Duplicate keys crash the UI's keyed {#each}.
+  const seen = new Set<string>();
+  const monitors = [...(bucket?.alerting_monitors ?? []), ...(bucket?.monitors ?? [])]
+    .map(toProbe)
+    .filter((p) => {
+      const key = `${p.type}|${p.target}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   const latencyFromBucket =
     typeof bucket?.latency_average === 'number' ? bucket.latency_average : null;
   return {
