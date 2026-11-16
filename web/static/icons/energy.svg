@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#16212d"/><stop offset="1" stop-color="#0a0e13"/>
+  </linearGradient></defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  
+  <defs><linearGradient id="leaf" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#3fbf86"/><stop offset="0.55" stop-color="#23935f"/><stop offset="1" stop-color="#18744b"/>
+  </linearGradient></defs>
+  <rect x="249" y="444" width="14" height="30" rx="4" fill="#6b5038"/>
+  <path d="M256 70 Q273.4 91.2 273.5 112.4 Q288.1 133.7 285.4 154.9 Q299.3 176.1 295.8 197.3 Q309.3 218.6 305.4 239.8 Q316.4 261.0 310.0 282.2 Q318.6 303.4 310.0 324.7 Q318.6 345.9 310.0 367.1 Q316.4 388.3 305.6 409.6 Q306.2 430.8 289.5 452.0 Q256 462.0 222.5 452.0 Q205.8 430.8 206.4 409.6 Q195.6 388.3 202.0 367.1 Q193.4 345.9 202.0 324.7 Q193.4 303.4 202.0 282.2 Q195.6 261.0 206.6 239.8 Q202.7 218.6 216.2 197.3 Q212.7 176.1 226.6 154.9 Q223.9 133.7 238.5 112.4 Q238.6 91.2 256.0 70.0Z" fill="url(#leaf)"/>
+  <g fill="none" stroke="#125c3c" stroke-width="5.9" stroke-linecap="round" opacity="0.55"><path d="M231.7 155.3 Q247.9 139.1 264.1 155.3"/><path d="M253.8 193.5 Q270.0 177.3 286.2 193.5"/><path d="M226.1 231.7 Q242.3 215.5 258.5 231.7"/><path d="M260.3 269.9 Q276.5 253.7 292.7 269.9"/><path d="M223.6 308.1 Q239.8 291.9 256.0 308.1"/><path d="M260.3 346.3 Q276.5 330.1 292.7 346.3"/><path d="M223.6 384.5 Q239.8 368.3 256.0 384.5"/></g>
+  <path d="M282 196 L214 314 L254 314 L234 404 L304 276 L262 276 Z"
+    fill="#f5b82e" stroke="#0d131a" stroke-width="14" stroke-linejoin="round" paint-order="stroke"/>
+</svg>

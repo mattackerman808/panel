@@ -2,13 +2,26 @@
 <html lang="en" data-theme="graphite">
   <head>
     <meta charset="utf-8" />
-    <link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/favicon.svg" />
+    <!-- Home-screen identity. These name the network panel; for the energy
+         kiosk (energy.* hosts) the server rewrites icons/panel → icons/energy
+         and the app title before sending the page, and the script below does
+         the same for ?view=energy (dev). -->
+    <link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/icons/panel.svg" />
+    <link rel="apple-touch-icon" href="%sveltekit.assets%/icons/panel-180.png" />
+    <link rel="manifest" href="%sveltekit.assets%/icons/panel.webmanifest" />
+    <meta name="apple-mobile-web-app-title" content="Panel" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0a0e13" />
     <title>panel</title>
     <script>
       if (location.search.includes('kiosk=1')) document.documentElement.dataset.kiosk = '1';
+      if (/[?&]view=energy\b/.test(location.search)) {
+        document.querySelectorAll('link[rel=icon], link[rel=apple-touch-icon], link[rel=manifest]').forEach(function (l) {
+          l.setAttribute('href', l.getAttribute('href').replace('icons/panel', 'icons/energy'));
+        });
+        document.querySelector('meta[name=apple-mobile-web-app-title]').setAttribute('content', 'Energy');
+      }
     </script>
     %sveltekit.head%
   </head>
