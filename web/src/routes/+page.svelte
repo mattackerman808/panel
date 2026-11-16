@@ -194,9 +194,12 @@
     grid-row: 4;
   }
   /* Compact (COMPACT_QUERY): the document scrolls; the page bar sticks to
-     the bottom of the viewport. */
+     the bottom of the viewport. Safe-area insets (viewport-fit=cover in
+     app.html) keep content clear of the notch, status bar and, in the
+     page bar, the home indicator when opened as a home-screen web app. */
   @media (max-width: 900px), (max-height: 500px) {
     .shell {
+      padding: calc(0.5rem + env(safe-area-inset-top)) env(safe-area-inset-right) 0 env(safe-area-inset-left);
       height: auto;
       min-height: 100dvh;
       grid-template-columns: minmax(0, 1fr);

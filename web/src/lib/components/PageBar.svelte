@@ -7,10 +7,18 @@
   type PageTab = { id: string; label: string };
   type Props = { pages: PageTab[]; activeId: string; progress: number; paused: boolean; onselect: (index: number) => void };
   let { pages, activeId, progress, paused, onselect }: Props = $props();
+
+  // On a phone the tabs scroll sideways; keep the active one in view.
+  let tabs = $state<HTMLOListElement | null>(null);
+  $effect(() => {
+    void activeId;
+    const el = tabs?.querySelector<HTMLElement>('.tab.active');
+    if (el && tabs && tabs.scrollWidth > tabs.clientWidth) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
 </script>
 
 <nav class="pagebar" aria-label="Pages">
-  <ol class="tabs">
+  <ol class="tabs" bind:this={tabs}>
     {#each pages as p, i (p.id)}
       <li>
         <button type="button" class="tab" class:active={p.id === activeId} onclick={() => onselect(i)}>
@@ -123,6 +131,7 @@
       position: sticky;
       bottom: 0;
       z-index: 10;
+      /* Clear the iOS home indicator (needs viewport-fit=cover). */
       padding: 0.35rem 0.5rem calc(0.35rem + env(safe-area-inset-bottom));
       background: color-mix(in oklab, var(--bg) 88%, transparent);
       backdrop-filter: blur(10px);
