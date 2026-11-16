@@ -19,6 +19,11 @@
      --ink / --ink-2 / --ink-3                       text: primary, secondary, labels
      --accent                                        UI accent (active state, brand, neutral meters)
      --rx / --tx                                     the two data series: download, upload
+     --home / --solar / --battery / --grid           energy kiosk series, in that order. Validated
+                                                     as ADJACENT pairs only (dataviz validator, all
+                                                     three theme surfaces): no four-way all-pairs set
+                                                     passes, so a chart never plots more than home +
+                                                     solar together; grid and battery get their own.
      --ok / --warn / --crit                          reserved status colors, always with a label
    Themes change the planes and the accent only; the data and status colors
    carry meaning and are the same everywhere.
@@ -46,6 +51,15 @@
   --rx-soft: rgba(45, 150, 221, 0.18);
   --tx: #bf8526;
   --tx-soft: rgba(191, 133, 38, 0.2);
+
+  --home: #3987e5;
+  --home-soft: rgba(57, 135, 229, 0.2);
+  --solar: #c98500;
+  --solar-soft: rgba(201, 133, 0, 0.22);
+  --battery: #199e70;
+  --battery-soft: rgba(25, 158, 112, 0.2);
+  --grid: #9085e9;
+  --grid-soft: rgba(144, 133, 233, 0.2);
 
   --ok: #36c27a;
   --ok-soft: rgba(54, 194, 122, 0.16);
@@ -357,6 +371,18 @@ html[data-kiosk='1'] body {
 }
 .glyph.tx {
   color: var(--tx);
+}
+.swatch.s-home {
+  background: var(--home);
+}
+.swatch.s-solar {
+  background: var(--solar);
+}
+.swatch.s-battery {
+  background: var(--battery);
+}
+.swatch.s-grid {
+  background: var(--grid);
 }
 
 /* ============================================================

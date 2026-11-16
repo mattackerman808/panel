@@ -1,6 +1,6 @@
 import { buildTopology, type TopoEdge } from './topology.js';
 import { bps, pct, shortName } from './format.js';
-import type { Band, ClientStat, DeviceType, NetworkDevice, UpsInfo, Wan, Features, EventSeverity } from './types.js';
+import type { Band, ClientStat, DeviceType, EnergyDay, NetworkDevice, PowerwallInfo, UpsInfo, Wan, Features, EventSeverity } from './types.js';
 
 /** Pure derivations over the snapshot: what needs attention, fleet rollups,
  *  link utilization. Kept out of the components so the thresholds live in one
@@ -34,6 +34,12 @@ export const THRESHOLDS = {
   upsChargeWarnPct: 50,
   upsChargeCritPct: 20,
   satisfactionWarn: 70,
+  // Powerwall charge (app-scaled %). The gateway keeps its own backup
+  // reserve, so these flag "the reserve is close", not "empty".
+  powerwallChargeWarnPct: 25,
+  powerwallChargeCritPct: 12,
+  // No fresh gateway reading for this long reads as stale on the kiosk.
+  powerwallStaleMs: 60_000,
 } as const;
 
 export type Alert = {
@@ -117,24 +123,80 @@ export function deriveAlerts(s: AlertInput): Alert[] {
     else if (l.utilization >= THRESHOLDS.linkUtilWarn) add('warn', l.label, `link ${pct(l.utilization * 100)} of ${bps(l.capacityBps / 8)}`, 'wired');
   }
 
-  if (s.features.upsAvailable) {
-    const u = s.ups;
-    if (!u || !u.reachable) add('warn', 'UPS', 'not answering SNMP', 'power');
-    else {
-      if (u.onBattery) add('crit', 'UPS', `on battery${u.minutesRemaining != null ? ` — ${u.minutesRemaining} min left` : ''}`, 'power');
-      if (u.batteryStatus === 'low' || u.batteryStatus === 'depleted') add('crit', 'UPS', `battery ${u.batteryStatus}`, 'power');
-      if (u.chargePct != null && u.chargePct < THRESHOLDS.upsChargeCritPct) add('crit', 'UPS', `charge ${pct(u.chargePct)}`, 'power');
-      else if (u.chargePct != null && u.chargePct < THRESHOLDS.upsChargeWarnPct) add('warn', 'UPS', `charge ${pct(u.chargePct)}`, 'power');
-      if (u.loadPct != null && u.loadPct >= THRESHOLDS.upsLoadWarnPct) add('warn', 'UPS', `load ${pct(u.loadPct)}`, 'power');
-    }
-  }
+  if (s.features.upsAvailable) upsAlerts(s.ups, add);
 
-  // Dedupe (same subject+detail can arise twice from both link ends) and
-  // order critical first.
+  return finalizeAlerts(out);
+}
+
+type AddAlert = (severity: EventSeverity, subject: string, detail: string, page: string) => void;
+
+function upsAlerts(u: UpsInfo | null, add: AddAlert): void {
+  if (!u || !u.reachable) add('warn', 'UPS', 'not answering SNMP', 'power');
+  else {
+    if (u.onBattery) add('crit', 'UPS', `on battery${u.minutesRemaining != null ? ` — ${u.minutesRemaining} min left` : ''}`, 'power');
+    if (u.batteryStatus === 'low' || u.batteryStatus === 'depleted') add('crit', 'UPS', `battery ${u.batteryStatus}`, 'power');
+    if (u.chargePct != null && u.chargePct < THRESHOLDS.upsChargeCritPct) add('crit', 'UPS', `charge ${pct(u.chargePct)}`, 'power');
+    else if (u.chargePct != null && u.chargePct < THRESHOLDS.upsChargeWarnPct) add('warn', 'UPS', `charge ${pct(u.chargePct)}`, 'power');
+    if (u.loadPct != null && u.loadPct >= THRESHOLDS.upsLoadWarnPct) add('warn', 'UPS', `load ${pct(u.loadPct)}`, 'power');
+  }
+}
+
+/** Dedupe (same subject+detail can arise twice from both link ends) and
+ *  order critical first. */
+function finalizeAlerts(out: Alert[]): Alert[] {
   const seen = new Set<string>();
   return out
     .filter((a) => (seen.has(a.id) ? false : (seen.add(a.id), true)))
     .sort((a, b) => severityRank[a.severity] - severityRank[b.severity] || a.subject.localeCompare(b.subject));
+}
+
+export type EnergyAlertInput = {
+  powerwall: PowerwallInfo | null;
+  ups: UpsInfo | null;
+  features: Features;
+  connection: string;
+  now: number;
+};
+
+/** What needs attention on the energy kiosk: grid outage, Powerwall
+ *  reachability/staleness/charge, and the rack UPS. */
+export function deriveEnergyAlerts(s: EnergyAlertInput): Alert[] {
+  const out: Alert[] = [];
+  const add: AddAlert = (severity, subject, detail, page) => out.push({ id: `${page}:${subject}:${detail}`, severity, subject, detail, page });
+
+  if (s.connection !== 'open') add('crit', 'Feed', 'dashboard disconnected from the panel server', 'energy');
+  if (s.features.powerwallAvailable && s.connection === 'open') {
+    const p = s.powerwall;
+    if (!p || !p.reachable) add('warn', 'Powerwall', 'gateway not answering', 'energy');
+    else {
+      if (s.now - p.updatedAt > THRESHOLDS.powerwallStaleMs) add('warn', 'Powerwall', 'readings are stale', 'energy');
+      if (p.grid === 'islanded') add('crit', 'Grid', 'outage — home running on Powerwall', 'energy');
+      if (p.chargePct != null && p.chargePct < THRESHOLDS.powerwallChargeCritPct) add('crit', 'Powerwall', `charge ${pct(p.chargePct)}`, 'energy');
+      else if (p.chargePct != null && p.chargePct < THRESHOLDS.powerwallChargeWarnPct) add('warn', 'Powerwall', `charge ${pct(p.chargePct)}`, 'energy');
+    }
+  }
+  if (s.features.upsAvailable) upsAlerts(s.ups, add);
+  return finalizeAlerts(out);
+}
+
+/** Direction words for a signed flow, so the UI never relies on a sign or
+ *  a color alone. */
+export function gridDirection(w: number): 'importing' | 'exporting' | 'idle' {
+  return Math.abs(w) < 20 ? 'idle' : w > 0 ? 'importing' : 'exporting';
+}
+export function batteryDirection(w: number): 'discharging' | 'charging' | 'idle' {
+  return Math.abs(w) < 20 ? 'idle' : w > 0 ? 'discharging' : 'charging';
+}
+
+/** Share of the home's energy that didn't come from the grid (solar +
+ *  battery), 0–100; null with no consumption. */
+export function selfPoweredPct(day: EnergyDay | null): number | null {
+  if (!day || day.homeWh <= 0) return null;
+  return Math.max(0, Math.min(100, (1 - day.gridImportWh / day.homeWh) * 100));
+}
+
+export function gridLabel(g: PowerwallInfo['grid']): string {
+  return g === 'connected' ? 'Grid connected' : g === 'islanded' ? 'Off grid' : g === 'transition' ? 'Switching' : 'Grid unknown';
 }
 
 export function deviceStateLabel(state: number): string {

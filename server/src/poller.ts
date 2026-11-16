@@ -10,11 +10,14 @@ import type {
   DpiCategory,
   HealthSubsystem,
   NetworkDevice,
+  PowerwallInfo,
+  PowerwallSample,
   UdmInfo,
   UpsInfo,
   Wan,
   WanStatus,
 } from './types.js';
+import { EnergyLedger, PowerwallClient } from './powerwall.js';
 import { UpsClient } from './ups.js';
 import { type GatewayWanDetails, UnifiClient } from './unifi.js';
 
@@ -145,6 +148,7 @@ export async function startPoller(): Promise<void> {
       snmpAvailable,
       upsAvailable: config.ups.enabled,
       controllerAvailable: unifiOk,
+      powerwallAvailable: config.powerwall.enabled,
     });
   };
   publishFeatures(false);
@@ -163,6 +167,27 @@ export async function startPoller(): Promise<void> {
   let upsAt = 0;
   if (upsClient) {
     console.log(`[poller] UPS SNMP enabled at ${config.ups.host}`);
+  }
+
+  // === Powerwall setup (optional; independent of the UDM, like the UPS).
+  //     The ledger turns lifetime counters into daily totals and readings
+  //     into 1-minute averages, both persisted in data/energy.json. ===
+  const powerwallClient = config.powerwall.enabled
+    ? new PowerwallClient({
+        host: config.powerwall.host,
+        email: config.powerwall.email,
+        password: config.powerwall.password,
+        insecureTls: config.powerwall.insecureTls,
+      })
+    : null;
+  const ledger = powerwallClient ? new EnergyLedger() : null;
+  let lastPowerwall: PowerwallInfo | null = null;
+  let powerwallSample: PowerwallSample | null = null;
+  let powerwallAt = 0;
+  let energyDay = '';
+  if (powerwallClient && ledger) {
+    console.log(`[poller] Powerwall enabled at ${config.powerwall.host}`);
+    store.seedEnergy(ledger.history(), ledger.daily());
   }
 
   // === SNMP setup ===
@@ -498,7 +523,37 @@ export async function startPoller(): Promise<void> {
           }),
       );
     }
+    // Powerwall: same isolation as the UPS — a failed poll marks it
+    // unreachable but never holds up the WAN tick.
+    if (powerwallClient && ledger && now - powerwallAt >= config.poll.powerwallMs) {
+      powerwallAt = now;
+      tasks.push(
+        powerwallClient
+          .poll()
+          .then(({ counters, ...r }) => {
+            if (counters) ledger.addCounters(counters);
+            powerwallSample = ledger.addReading(r, r.updatedAt) ?? powerwallSample;
+            lastPowerwall = { ...r, today: ledger.today() };
+          })
+          .catch((e) => {
+            lastPowerwall = lastPowerwall ? { ...lastPowerwall, reachable: false } : null;
+            console.error('[poller] powerwall poll error', e instanceof Error ? e.message : e);
+          }),
+      );
+    }
     await Promise.all(tasks);
+
+    // Daily energy ships when a minute closes (today's bar grows) or the
+    // date rolls over; the ledger itself is flushed to disk once a minute.
+    let energyDaily = undefined as ReturnType<EnergyLedger['daily']> | undefined;
+    if (ledger) {
+      const d = new Date().toDateString();
+      if (powerwallSample || d !== energyDay) {
+        energyDaily = ledger.daily();
+        energyDay = d;
+      }
+      ledger.saveIfDue(now);
+    }
 
     // Usage accumulators: roll the month over on calendar-month change, then
     // add this tick's SNMP counter delta to the month and to today's bucket.
@@ -600,8 +655,12 @@ export async function startPoller(): Promise<void> {
       devices: lastDevices.length ? lastDevices : undefined,
       health: lastHealth.length ? lastHealth : undefined,
       ups: lastUps ?? undefined,
+      powerwall: lastPowerwall ?? undefined,
+      powerwallSample: powerwallSample ?? undefined,
+      energyDaily,
     });
     usageDailyOut = null;
+    powerwallSample = null;
   };
 
   await tick();
@@ -624,13 +683,22 @@ async function startMockPoller(): Promise<void> {
   console.log('[poller] running in MOCK mode');
   const world = createMockWorld();
   store.setSource('mock');
-  store.setFeatures({ dpiAvailable: true, perClientRates: true, snmpAvailable: true, upsAvailable: true, controllerAvailable: true });
+  store.setFeatures({
+    dpiAvailable: true,
+    perClientRates: true,
+    snmpAvailable: true,
+    upsAvailable: true,
+    controllerAvailable: true,
+    powerwallAvailable: true,
+  });
   world.seedEvents((e) => store.recordEvent(e));
 
   const { apps, categories } = world.dpi();
   let slowAt = 0;
   let clientsAt = 0;
   let usageAt = 0;
+  let powerwallAt = 0;
+  let minute = 0;
   const run = (t: number): void => {
     const wans = world.wans(t);
     const slow = t - slowAt >= config.poll.udmInfoMs;
@@ -639,12 +707,21 @@ async function startMockPoller(): Promise<void> {
     if (slow) slowAt = t;
     if (clientsDue) clientsAt = t;
     if (usageDue) usageAt = t;
+    const powerwallDue = t - powerwallAt >= config.poll.powerwallMs;
+    if (powerwallDue) powerwallAt = t;
+    // A minute closed: ship its sample and refresh the daily totals.
+    const m = t - (t % 60_000);
+    const minuteClosed = minute !== 0 && m !== minute;
+    const closedMinute = minute;
+    minute = m;
     store.pushTick(
       {
         wans,
         ...(usageDue ? { usageDaily: world.usageDaily(t) } : {}),
         ...(clientsDue ? { clients: world.clients(t), dpi: apps, dpiCategories: categories } : {}),
         ...(slow ? { devices: world.devices(t), udm: world.udm(t), health: world.health(wans, t), ups: world.ups(t) } : {}),
+        ...(powerwallDue ? { powerwall: world.powerwall(t) } : {}),
+        ...(minuteClosed ? { powerwallSample: world.powerwallSample(closedMinute), energyDaily: world.energyDaily(t) } : {}),
       },
       t,
     );
@@ -655,6 +732,9 @@ async function startMockPoller(): Promise<void> {
   const backfillStart = now - span;
   // Clients first so the gateway history has client counts from the start.
   clientsAt = backfillStart - config.poll.clientsMs;
+  // The energy chart spans 24h, far beyond the 15-minute replay: seed the
+  // rest directly (the minute the replay starts in is closed by the replay).
+  store.seedEnergy(world.powerwallHistory(now - 24 * 3_600_000, backfillStart), world.energyDaily(backfillStart));
   for (let t = backfillStart; t < now; t += config.poll.wanMs) run(t);
   console.log(`[poller] mock history backfilled (${Math.round(span / 60_000)} min)`);
   run(now);

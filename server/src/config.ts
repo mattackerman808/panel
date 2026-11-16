@@ -80,6 +80,20 @@ export const config = {
     community: process.env.UPS_SNMP_COMMUNITY ?? 'public',
     port: num(process.env.UPS_SNMP_PORT, 161),
   },
+  // Tesla Powerwall over the gateway's local HTTPS API (customer login).
+  // Disabled unless POWERWALL_HOST is set. POWERWALL_PASSWORD is the
+  // customer password — on a Powerwall 3, the last 5 characters of the
+  // password printed on the unit's label. The gateway's TLS cert is
+  // self-signed, hence the insecure-TLS default.
+  powerwall: {
+    enabled: !!process.env.POWERWALL_HOST,
+    host: process.env.POWERWALL_HOST ?? '',
+    email: process.env.POWERWALL_EMAIL ?? 'panel@localhost',
+    password: process.env.POWERWALL_PASSWORD ?? '',
+    insecureTls: bool(process.env.POWERWALL_INSECURE_TLS, true),
+    // Name shown on the energy kiosk's top bar.
+    siteName: process.env.PANEL_ENERGY_SITE_NAME ?? process.env.PANEL_SITE_NAME ?? 'Home',
+  },
   snmp: {
     community: process.env.UDM_SNMP_COMMUNITY ?? 'public',
     port: num(process.env.UDM_SNMP_PORT, 161),
@@ -105,6 +119,9 @@ export const config = {
     // to battery) are fast, so poll at 5s. The UPS agent is on a separate
     // host from the UDM, so this cadence is independent of the WAN tick.
     upsMs: num(process.env.PANEL_POLL_UPS_MS, 5000),
+    // The gateway refreshes its meters about once a second; 5s keeps the
+    // flow figures lively without leaning on a small embedded web server.
+    powerwallMs: num(process.env.PANEL_POLL_POWERWALL_MS, 5000),
     // How often to re-attempt a subsystem that came up dead. The Pi can
     // start panel.service before eth0 has an address, which used to leave
     // the poller WAN-less (and every chart blank) until a manual restart.

@@ -4,11 +4,14 @@ import type {
   ClientStat,
   DailyUsage,
   DpiCategory,
+  EnergyDay,
   EventSeverity,
   HealthSubsystem,
   NetworkDevice,
   NetworkPort,
   NetworkRadio,
+  PowerwallInfo,
+  PowerwallSample,
   UdmInfo,
   UpsInfo,
   Wan,
@@ -834,5 +837,166 @@ export function createMockWorld() {
     record({ ts: now - 3 * h, severity: 'info', kind: 'device.online', subject: `living-ap.${DOMAIN}`, message: `living-ap.${DOMAIN} is back online` });
   }
 
-  return { wans, usageDaily, health, clients: clientStats, devices: deviceList, dpi, udm: udmInfo, ups, seedEvents };
+  return { wans, usageDaily, health, clients: clientStats, devices: deviceList, dpi, udm: udmInfo, ups, seedEvents, ...createMockEnergy() };
+}
+
+// --- Powerwall site --------------------------------------------------------
+
+/** A Powerwall 3 home with ~8 kW of solar, as a pure function of local time.
+ *  The battery follows a daily state-of-charge curve (overnight drain,
+ *  midday solar charge, evening drain) and its power is the slope of that
+ *  curve, so the charge and the flows agree; grid is whatever balances
+ *  solar + battery against the home load. A three-minute grid outage every
+ *  four hours exercises the islanded state and its events. */
+function createMockEnergy() {
+  const CAPACITY_WH = 13_500;
+  const HOUR = 3_600_000;
+  const localHour = (t: number): number => {
+    const d = new Date(t);
+    return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+  };
+  const dayIndex = (t: number): number => {
+    const d = new Date(t);
+    return d.getFullYear() * 400 + d.getMonth() * 32 + d.getDate();
+  };
+
+  /** Piecewise-linear SoC (%) over the local day: [hour, pct] knots. */
+  const SOC_KNOTS: Array<[number, number]> = [
+    [0, 74],
+    [7, 41],
+    [9.5, 40],
+    [14, 100],
+    [17, 100],
+    [24, 74],
+  ];
+  function socAt(h: number): { pct: number; slopePerHour: number } {
+    for (let i = 1; i < SOC_KNOTS.length; i++) {
+      const [h1, p1] = SOC_KNOTS[i]!;
+      const [h0, p0] = SOC_KNOTS[i - 1]!;
+      if (h <= h1) {
+        const slope = (p1 - p0) / (h1 - h0);
+        return { pct: p0 + slope * (h - h0), slopePerHour: slope };
+      }
+    }
+    return { pct: SOC_KNOTS[0]![1], slopePerHour: 0 };
+  }
+
+  function solarW(t: number): number {
+    const h = localHour(t);
+    const rise = 6.6;
+    const set = 17.4;
+    if (h <= rise || h >= set) return 0;
+    const sun = Math.pow(Math.sin((Math.PI * (h - rise)) / (set - rise)), 1.3);
+    // Per-day weather (some days overcast) and passing clouds within it.
+    const weather = 0.45 + 0.55 * hash(dayIndex(t) * 13 + 5);
+    const cloud = 1 - 0.4 * clamp(Math.sin(t / 410_000) * 0.8 + jitter(t, 811, 60_000) * 0.4, 0, 1);
+    return Math.round(7_800 * sun * weather * cloud);
+  }
+
+  function homeW(t: number): number {
+    const h = localHour(t);
+    const bump = (center: number, width: number, amp: number) => amp * Math.exp(-Math.pow((h - center) / width, 2));
+    // Appliances: a 15-minute bucket sometimes runs an extra 1.5–3.5 kW.
+    const b = Math.floor(t / 900_000);
+    const appliance = hash(b * 71 + 3) < 0.18 ? 1_500 + 2_000 * hash(b * 71 + 4) : 0;
+    const base = 620 + bump(7.8, 1.2, 1_100) + bump(19, 2.2, 2_300) + appliance;
+    return Math.round(base * (1 + 0.06 * jitter(t, 812, 5_000)));
+  }
+
+  function islanded(t: number): boolean {
+    // 3 minutes starting at :20 every fourth hour.
+    const h = Math.floor(t / HOUR);
+    const m = (t % HOUR) / 60_000;
+    return h % 4 === 1 && m >= 20 && m < 23;
+  }
+
+  function flows(t: number): { solarW: number; homeW: number; gridW: number; batteryW: number; chargePct: number; grid: 'connected' | 'islanded' } {
+    const solar = solarW(t);
+    const home = homeW(t);
+    const soc = socAt(localHour(t));
+    if (islanded(t)) {
+      // Off-grid: the battery covers whatever solar doesn't.
+      return { solarW: solar, homeW: home, gridW: 0, batteryW: home - solar, chargePct: soc.pct, grid: 'islanded' };
+    }
+    // Battery power from the SoC slope: +discharge / -charge.
+    const battery = Math.round((-soc.slopePerHour / 100) * CAPACITY_WH);
+    return { solarW: solar, homeW: home, gridW: home - solar - battery, batteryW: battery, chargePct: soc.pct, grid: 'connected' };
+  }
+
+  /** Integrate the flows over [from, to) at 5-minute steps into one day's totals. */
+  function integrate(date: string, from: number, to: number): EnergyDay {
+    const day: EnergyDay = { date, solarWh: 0, homeWh: 0, gridImportWh: 0, gridExportWh: 0, batteryChargeWh: 0, batteryDischargeWh: 0 };
+    const step = 300_000;
+    for (let t = from; t < to; t += step) {
+      const f = flows(t);
+      const hrs = Math.min(step, to - t) / HOUR;
+      day.solarWh += f.solarW * hrs;
+      day.homeWh += f.homeW * hrs;
+      if (f.gridW > 0) day.gridImportWh += f.gridW * hrs;
+      else day.gridExportWh += -f.gridW * hrs;
+      if (f.batteryW > 0) day.batteryDischargeWh += f.batteryW * hrs;
+      else day.batteryChargeWh += -f.batteryW * hrs;
+    }
+    for (const k of ['solarWh', 'homeWh', 'gridImportWh', 'gridExportWh', 'batteryChargeWh', 'batteryDischargeWh'] as const) {
+      day[k] = Math.round(day[k]);
+    }
+    return day;
+  }
+
+  const label = (d: Date): string =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const midnight = (t: number): number => {
+    const d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+
+  function powerwall(t: number): PowerwallInfo {
+    const f = flows(t);
+    const start = midnight(t);
+    return {
+      reachable: true,
+      grid: f.grid,
+      gridStatusRaw: f.grid === 'islanded' ? 'SystemIslandedActive' : 'SystemGridConnected',
+      gridServicesActive: false,
+      gridW: f.gridW,
+      batteryW: f.batteryW,
+      homeW: f.homeW,
+      solarW: f.solarW,
+      chargePct: Math.round(f.chargePct * 10) / 10,
+      voltageV: f.grid === 'islanded' ? 240.1 : 241 + 1.5 * jitter(t, 813, 10_000),
+      frequencyHz: 60 + 0.02 * jitter(t, 814, 10_000),
+      // Today so far, to the last whole minute (cheap enough to recompute).
+      today: integrate(label(new Date(t)), start, t - (t % 60_000)),
+      updatedAt: t,
+    };
+  }
+
+  /** The finished one-minute sample at minute `m` (its start time). */
+  function powerwallSample(m: number): PowerwallSample {
+    const f = flows(m + 30_000);
+    return { ts: m, solarW: f.solarW, homeW: f.homeW, gridW: f.gridW, batteryW: f.batteryW, chargePct: Math.round(f.chargePct * 10) / 10 };
+  }
+
+  /** Minute samples for [from, to), oldest first. */
+  function powerwallHistory(from: number, to: number): PowerwallSample[] {
+    const out: PowerwallSample[] = [];
+    for (let m = from - (from % 60_000); m < to - (to % 60_000); m += 60_000) out.push(powerwallSample(m));
+    return out;
+  }
+
+  /** The last 14 days plus today so far, oldest first. */
+  function energyDaily(t: number): EnergyDay[] {
+    const out: EnergyDay[] = [];
+    const today = midnight(t);
+    for (let i = 14; i >= 1; i--) {
+      const start = midnight(today - i * 24 * HOUR + HOUR); // DST-safe
+      const end = midnight(start + 25 * HOUR);
+      out.push(integrate(label(new Date(start)), start, end));
+    }
+    out.push(integrate(label(new Date(today)), today, t - (t % 60_000)));
+    return out;
+  }
+
+  return { powerwall, powerwallSample, powerwallHistory, energyDaily };
 }

@@ -3,8 +3,9 @@
   import { connectWs, panel } from '$lib/store.svelte';
   import { theme } from '$lib/theme.svelte';
   import { startBurnInGuard } from '$lib/burnInGuard';
-  import { deriveAlerts } from '$lib/derive';
+  import { deriveAlerts, deriveEnergyAlerts } from '$lib/derive';
   import TopBar from '$lib/components/TopBar.svelte';
+  import EnergyTopBar from '$lib/components/EnergyTopBar.svelte';
   import AlertStrip from '$lib/components/AlertStrip.svelte';
   import PageBar from '$lib/components/PageBar.svelte';
   import OverviewPage from '$lib/pages/OverviewPage.svelte';
@@ -14,6 +15,9 @@
   import ClientsPage from '$lib/pages/ClientsPage.svelte';
   import TopologyPage from '$lib/pages/TopologyPage.svelte';
   import PowerPage from '$lib/pages/PowerPage.svelte';
+  import EnergyNowPage from '$lib/pages/EnergyNowPage.svelte';
+  import EnergyTodayPage from '$lib/pages/EnergyTodayPage.svelte';
+  import EnergyHistoryPage from '$lib/pages/EnergyHistoryPage.svelte';
   import '../app.css';
 
   /** The kiosk shell: a persistent status bar, an exceptions strip that only
@@ -22,7 +26,7 @@
    *  (`?pages=overview,wired&dwell=30`, `?page=wired` pins one page) or from
    *  the server's PANEL_UI_* settings. */
   type PageDef = { id: string; label: string; component: Component<{ active?: boolean }>; available?: () => boolean };
-  const ALL_PAGES: PageDef[] = [
+  const NETWORK_PAGES: PageDef[] = [
     { id: 'overview', label: 'Overview', component: OverviewPage },
     { id: 'internet', label: 'Internet', component: InternetPage },
     { id: 'wired', label: 'Wired', component: WiredPage },
@@ -31,8 +35,22 @@
     { id: 'topology', label: 'Topology', component: TopologyPage },
     { id: 'power', label: 'Power', component: PowerPage, available: () => panel.features.upsAvailable },
   ];
+  /** The home-power kiosk: same server, same shell, its own pages. The rack
+   *  UPS page is shared (id 'power', so UPS alerts point at it here too). */
+  const ENERGY_PAGES: PageDef[] = [
+    { id: 'energy', label: 'Now', component: EnergyNowPage },
+    { id: 'today', label: 'Today', component: EnergyTodayPage },
+    { id: 'history', label: 'History', component: EnergyHistoryPage },
+    { id: 'power', label: 'UPS', component: PowerPage, available: () => panel.features.upsAvailable },
+  ];
 
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  /** energy.808.org (any energy.* host) shows the home-power kiosk; ?view=
+   *  overrides either way, which is also how to reach it in dev. */
+  const view = params.get('view');
+  const energyMode =
+    view === 'energy' || (view !== 'network' && typeof window !== 'undefined' && window.location.hostname.startsWith('energy.'));
+  const ALL_PAGES = energyMode ? ENERGY_PAGES : NETWORK_PAGES;
   /** `?page=x` pins one page (no rotation); `?start=x` just begins the normal
    *  rotation on that page. */
   const pinned = params.get('page');
@@ -41,7 +59,9 @@
   const urlDwell = Number(params.get('dwell'));
 
   const pages = $derived.by(() => {
-    const wanted = pinned ? [pinned] : (urlPages ?? panel.ui.pages ?? ALL_PAGES.map((p) => p.id));
+    // PANEL_UI_PAGES configures the network kiosk; the energy kiosk only
+    // takes its rotation from the URL.
+    const wanted = pinned ? [pinned] : (urlPages ?? (energyMode ? null : panel.ui.pages) ?? ALL_PAGES.map((p) => p.id));
     const list = wanted
       .map((id) => ALL_PAGES.find((p) => p.id === id))
       .filter((p): p is PageDef => !!p && (p.available?.() ?? true));
@@ -57,7 +77,9 @@
   const current = $derived(pages[Math.min(index, pages.length - 1)] ?? pages[0]!);
   const progress = $derived(paused || pages.length < 2 ? 0 : Math.min(1, (now - enteredAt) / dwellMs));
   const alerts = $derived(
-    deriveAlerts({
+    energyMode
+      ? deriveEnergyAlerts({ powerwall: panel.powerwall, ups: panel.ups, features: panel.features, connection: panel.connection, now })
+      : deriveAlerts({
       wans: panel.wans,
       devices: panel.devices,
       clients: panel.clients,
@@ -67,6 +89,7 @@
       connection: panel.connection,
     }),
   );
+  const docTitle = $derived(energyMode ? `${panel.ui.energySiteName ?? 'Home'} energy` : `${panel.ui.siteName} network`);
 
   function go(delta: 1 | -1): void {
     index = (Math.min(index, pages.length - 1) + delta + pages.length) % pages.length;
@@ -115,8 +138,14 @@
   });
 </script>
 
+<svelte:head><title>{docTitle}</title></svelte:head>
+
 <div class="panel-root shell">
-  <TopBar {alerts} />
+  {#if energyMode}
+    <EnergyTopBar {alerts} />
+  {:else}
+    <TopBar {alerts} />
+  {/if}
   {#if alerts.length > 0}
     <AlertStrip {alerts} />
   {/if}
