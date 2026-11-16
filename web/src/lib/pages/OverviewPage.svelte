@@ -252,4 +252,28 @@
   .small {
     font-size: 0.7rem;
   }
+
+  /* Compact (COMPACT_QUERY): one column; each WAN chart a fixed height. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .ov,
+    .bottom {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
+    .chart-block {
+      flex: none;
+    }
+    .chart-head {
+      flex-wrap: wrap;
+      row-gap: 0.2rem;
+    }
+    .chart-area {
+      flex: none;
+      height: 10rem;
+    }
+    .fleet {
+      gap: 0.8rem;
+    }
+  }
 </style>

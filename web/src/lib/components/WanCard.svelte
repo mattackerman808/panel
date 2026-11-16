@@ -239,4 +239,10 @@
     font-size: 0.76rem;
     white-space: nowrap;
   }
+  /* Compact (COMPACT_QUERY): the detail card's probes in one column. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .probes {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
 </style>

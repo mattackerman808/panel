@@ -115,6 +115,42 @@
     color: var(--ink-2);
     background: var(--surface);
   }
+  /* Compact (COMPACT_QUERY): a bottom tab bar that stays on screen while
+     the page scrolls. No rotation there, so no progress line, and the
+     keyboard legend means nothing on a phone. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .pagebar {
+      position: sticky;
+      bottom: 0;
+      z-index: 10;
+      padding: 0.35rem 0.5rem calc(0.35rem + env(safe-area-inset-bottom));
+      background: color-mix(in oklab, var(--bg) 88%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-top: 1px solid var(--line);
+    }
+    .tabs {
+      flex: 1;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .tabs li {
+      flex: 1 0 auto;
+    }
+    .tab {
+      width: 100%;
+      min-width: 4.5rem;
+      align-items: center;
+      padding: 0.6rem 0.6rem;
+    }
+    .tab .n,
+    .track {
+      display: none;
+    }
+    .legend {
+      display: none;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     .fill {
       transition: none;

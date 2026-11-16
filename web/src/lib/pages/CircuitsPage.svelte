@@ -8,11 +8,16 @@
   import Meter from '$lib/components/Meter.svelte';
   import RankedBars from '$lib/components/RankedBars.svelte';
   import CircuitFlow from '$lib/components/CircuitFlow.svelte';
+  import CircuitList from '$lib/components/CircuitList.svelte';
+  import { MediaQuery } from 'svelte/reactivity';
+  import { COMPACT_QUERY } from '$lib/ui';
 
   /** The Now page's power flow carried through the SPAN panel to every
    *  circuit (live draw, today's energy, breaker load), with today's energy
    *  ranked by circuit and the electrical service at the main lugs. */
   let { active = true }: { active?: boolean } = $props();
+  /** On a phone the diagram's text would be a few pixels tall: list instead. */
+  const compact = new MediaQuery(COMPACT_QUERY, false);
 
   const span = $derived(panel.span);
   const configured = $derived(panel.features.spanAvailable);
@@ -51,7 +56,11 @@
         <span>live draw · today · breaker load</span>
         <span>{live ? `updated ${relativeTime(span.updatedAt)}` : 'SPAN not publishing'}</span>
       {/snippet}
-      <CircuitFlow pw={panel.powerwall} {span} {rows} {active} />
+      {#if compact.current}
+        <CircuitList {rows} />
+      {:else}
+        <CircuitFlow pw={panel.powerwall} {span} {rows} {active} />
+      {/if}
     </Panel>
 
     <Panel title="Today by circuit">
@@ -100,5 +109,15 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.9rem 1.2rem;
     padding: 0.2rem 0 0.4rem;
+  }
+
+  /* Compact (COMPACT_QUERY): one column; CircuitList replaces the flow
+     diagram and sizes itself. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .circuits {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
   }
 </style>

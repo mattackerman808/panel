@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount, type Component } from 'svelte';
+  import { MediaQuery } from 'svelte/reactivity';
   import { connectWs, panel } from '$lib/store.svelte';
   import { theme } from '$lib/theme.svelte';
   import { startBurnInGuard } from '$lib/burnInGuard';
   import { deriveAlerts, deriveEnergyAlerts } from '$lib/derive';
+  import { COMPACT_QUERY } from '$lib/ui';
   import TopBar from '$lib/components/TopBar.svelte';
   import EnergyTopBar from '$lib/components/EnergyTopBar.svelte';
   import AlertStrip from '$lib/components/AlertStrip.svelte';
@@ -71,13 +73,18 @@
   });
   const dwellMs = $derived(Number.isFinite(urlDwell) && urlDwell > 0 ? urlDwell * 1000 : panel.ui.dwellMs);
 
+  /** Phone-sized screens scroll one page at a time and never rotate: a page
+   *  changing under your thumb mid-read is worse than a stale one. */
+  const compact = new MediaQuery(COMPACT_QUERY, false);
+
   let index = $state(Math.max(0, ALL_PAGES.findIndex((p) => p.id === startAt)));
   let paused = $state(!!pinned);
+  const rotating = $derived(!paused && !compact.current && pages.length > 1);
   let enteredAt = $state(Date.now());
   let now = $state(Date.now());
 
   const current = $derived(pages[Math.min(index, pages.length - 1)] ?? pages[0]!);
-  const progress = $derived(paused || pages.length < 2 ? 0 : Math.min(1, (now - enteredAt) / dwellMs));
+  const progress = $derived(rotating ? Math.min(1, (now - enteredAt) / dwellMs) : 0);
   const alerts = $derived(
     energyMode
       ? deriveEnergyAlerts({ powerwall: panel.powerwall, span: panel.span, ups: panel.ups, features: panel.features, connection: panel.connection, now })
@@ -96,11 +103,13 @@
   function go(delta: 1 | -1): void {
     index = (Math.min(index, pages.length - 1) + delta + pages.length) % pages.length;
     enteredAt = Date.now();
+    if (compact.current) window.scrollTo({ top: 0 });
   }
   function jump(i: number): void {
     if (i < 0 || i >= pages.length) return;
     index = i;
     enteredAt = Date.now();
+    if (compact.current) window.scrollTo({ top: 0 });
   }
 
   onMount(() => {
@@ -109,7 +118,7 @@
     const stopGuard = startBurnInGuard();
     const timer = window.setInterval(() => {
       now = Date.now();
-      if (!paused && pages.length > 1 && now - enteredAt >= dwellMs) go(1);
+      if (rotating && now - enteredAt >= dwellMs) go(1);
     }, 250);
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement | null)?.matches?.('input, textarea, [contenteditable]')) return;
@@ -161,7 +170,7 @@
       {/if}
     {/each}
   </main>
-  <PageBar pages={pages.map((p) => ({ id: p.id, label: p.label }))} activeId={current.id} {progress} {paused} onselect={jump} />
+  <PageBar pages={pages.map((p) => ({ id: p.id, label: p.label }))} activeId={current.id} {progress} paused={paused && !compact.current} onselect={jump} />
 </div>
 
 <style>
@@ -183,5 +192,17 @@
   }
   .shell > :global(.pagebar) {
     grid-row: 4;
+  }
+  /* Compact (COMPACT_QUERY): the document scrolls; the page bar sticks to
+     the bottom of the viewport. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .shell {
+      height: auto;
+      min-height: 100dvh;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto auto 1fr auto;
+      gap: 0.6rem;
+      overflow-x: clip;
+    }
   }
 </style>

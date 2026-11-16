@@ -16,3 +16,10 @@ export type RankedRow = {
   /** Optional leading marker: square for wired, circle for wireless. */
   marker?: 'wired' | 'wireless' | null;
 };
+
+/** Below the kiosk composition's minimum size (phones, small tablets,
+ *  landscape phones) the shell switches to a scrolling, single-column
+ *  layout and stops rotating pages. The same query is written out in
+ *  `app.css` and in component `<style>` blocks (CSS can't import it) —
+ *  search for `max-width: 900px` when changing it. */
+export const COMPACT_QUERY = '(max-width: 900px), (max-height: 500px)';

@@ -122,6 +122,7 @@
     gap: 0.8rem;
   }
   .mark {
+    flex: none;
     width: 0.9rem;
     height: 0.9rem;
     border-radius: 3px;
@@ -218,5 +219,50 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-3);
+  }
+
+  /* Compact (COMPACT_QUERY): brand and status on one line, then the live
+     figures two to a row. The phone has its own clock. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .topbar {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.85rem 1rem;
+      padding: 0.25rem 0.9rem 0;
+    }
+    .sep,
+    .spacer,
+    .clock {
+      display: none;
+    }
+    .topbar > * {
+      min-width: 0;
+    }
+    .brand {
+      order: -2;
+    }
+    .status {
+      order: -1;
+      align-self: center;
+    }
+    /* Landscape phones and small tablets: four to a row. */
+    @media (min-width: 600px) {
+      .topbar {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+      .brand {
+        grid-column: span 3;
+      }
+    }
+    .kpi {
+      order: 1;
+    }
+    .flow .eyebrow {
+      white-space: normal;
+    }
+    .sub {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   }
 </style>

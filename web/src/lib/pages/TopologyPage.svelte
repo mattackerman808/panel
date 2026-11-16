@@ -31,4 +31,13 @@
     min-height: 0;
     padding: 0.5rem 1rem 1rem;
   }
+
+  /* Compact (COMPACT_QUERY): a fixed-height window the drawing pans in
+     (TopologyView draws at a readable scale there instead of fitting). */
+  @media (max-width: 900px), (max-height: 500px) {
+    .canvas {
+      height: 70dvh;
+      padding: 0 0.5rem 0.5rem;
+    }
+  }
 </style>

@@ -163,4 +163,23 @@
   .min-w-0 {
     min-width: 0;
   }
+
+  /* Compact (COMPACT_QUERY): one column; recent joins drop the where-column
+     (the subtitle under the name still says what it is). */
+  @media (max-width: 900px), (max-height: 500px) {
+    .clients {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
+    .pop {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .recent > .row {
+      grid-template-columns: 0.6rem minmax(0, 1fr) auto;
+    }
+    .recent > .row > :nth-child(3) {
+      display: none;
+    }
+  }
 </style>

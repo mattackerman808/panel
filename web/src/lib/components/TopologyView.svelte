@@ -4,6 +4,8 @@
   import { buildTopology, type Topology, type TopoEdge } from '$lib/topology';
   import { bps, shortName, speedLabel } from '$lib/format';
   import { deviceTypeLabel } from '$lib/derive';
+  import { MediaQuery } from 'svelte/reactivity';
+  import { COMPACT_QUERY } from '$lib/ui';
 
   /** LLDP topology, laid out top-down by elkjs. Layout runs only when the
    *  structure changes; rates and link utilization restyle every tick.
@@ -14,6 +16,18 @@
   const EDGE_MAX_PX = 9;
 
   const elk = new ELK();
+  /** Fitting the whole graph to a phone makes its labels a few pixels tall;
+   *  there it is drawn at a fixed scale instead and the viewer pans. */
+  const compact = new MediaQuery(COMPACT_QUERY, false);
+  const PAN_SCALE = 0.8;
+  let box = $state<HTMLDivElement | null>(null);
+  // The WAN → gateway → aggregation chain sits mid-height beside the tall
+  // column of leaves: open the pan window there rather than on empty space.
+  $effect(() => {
+    if (!compact.current || !layout || !box) return;
+    const el = box;
+    requestAnimationFrame(() => (el.scrollTop = (el.scrollHeight - el.clientHeight) / 2));
+  });
 
   type LaidNode = { x: number; y: number };
   type LaidEdge = { points: Array<{ x: number; y: number }>; labelXY?: { x: number; y: number } };
@@ -121,11 +135,16 @@
   }
 </script>
 
-<div class="topo">
+<div class="topo" class:pan={compact.current} bind:this={box}>
   {#if !layout || layout.nodes.size === 0}
     <div class="empty">Building topology…</div>
   {:else}
-    <svg class="topo-svg" viewBox="-12 -12 {layout.width + 24} {layout.height + 24}" preserveAspectRatio="xMidYMid meet">
+    <svg
+      class="topo-svg"
+      viewBox="-12 -12 {layout.width + 24} {layout.height + 24}"
+      preserveAspectRatio="xMidYMid meet"
+      style={compact.current ? `width: ${(layout.width + 24) * PAN_SCALE}px; height: ${(layout.height + 24) * PAN_SCALE}px` : undefined}
+    >
       {#each topology.edges as edge (edge.id)}
         {@const laid = layout.edges.get(edge.id)}
         {#if laid}
@@ -175,6 +194,10 @@
     height: 100%;
     width: 100%;
     overflow: hidden;
+  }
+  .topo.pan {
+    overflow: auto;
+    overscroll-behavior: contain;
   }
   .topo-svg {
     width: 100%;

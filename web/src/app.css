@@ -514,3 +514,64 @@ html[data-kiosk='1'] body {
     transition: none;
   }
 }
+
+/* ============================================================
+   Compact layout — phones, small tablets, landscape phones.
+
+   The kiosk composition above is a fixed, non-scrolling 16:9 stage and
+   can't fit a phone, so below these sizes the document scrolls instead:
+   one page at a time (no rotation, no crossfade), panels stacked in a
+   single column at their natural height, charts at fixed heights, wide
+   tables scrolling sideways inside their panel. The query is
+   COMPACT_QUERY in $lib/ui.ts; pages and components repeat it in their
+   own styles.
+   ============================================================ */
+
+@media (max-width: 900px), (max-height: 500px) {
+  html {
+    height: auto;
+    font-size: 15px;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  body {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+  }
+  /* The burn-in drift is for an always-on LCD; on a phone it only nudges
+     the layout past the viewport edge. */
+  .panel-root {
+    transform: none !important;
+  }
+  .stage {
+    position: static;
+  }
+  .page {
+    position: static;
+    display: none;
+    padding: 0 0.75rem;
+    opacity: 1;
+    transition: none;
+  }
+  .page.active {
+    display: block;
+  }
+  .panel > header {
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+    padding: 0.8rem 0.9rem 0.5rem;
+  }
+  .panel-meta {
+    flex-wrap: wrap;
+    gap: 0.2rem 0.9rem;
+    white-space: normal;
+  }
+  .panel > .body {
+    padding: 0 0.9rem 0.9rem;
+  }
+  .empty {
+    height: auto;
+    min-height: 8rem;
+  }
+}
