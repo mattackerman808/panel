@@ -11,8 +11,10 @@
     max?: number | null;
     showRank?: boolean;
     dense?: boolean;
+    /** Series color for the bars (defaults to the download series). */
+    color?: string | null;
   };
-  let { rows, max = null, showRank = true, dense = false }: Props = $props();
+  let { rows, max = null, showRank = true, dense = false, color = null }: Props = $props();
 
   const scale = $derived(Math.max(1e-9, max ?? Math.max(0, ...rows.map((r) => r.value + (r.value2 ?? 0)))));
 </script>
@@ -32,7 +34,7 @@
           {#if r.sub}<span class="sub truncate">{r.sub}</span>{/if}
         </div>
         <div class="track">
-          <span class="fill rx" style="width: {w1}%"></span>
+          <span class="fill rx" style="width: {w1}%{color ? `; background: ${color}` : ''}"></span>
           {#if w2 > 0}<span class="fill tx" style="width: {w2}%"></span>{/if}
         </div>
       </div>

@@ -15,6 +15,7 @@ import type {
   PowerwallInfo,
   PowerwallSample,
   Snapshot,
+  SpanInfo,
   Tick,
   UdmInfo,
   UpsInfo,
@@ -55,6 +56,7 @@ const state = {
   powerwall: null as PowerwallInfo | null,
   powerwallHistory: [] as PowerwallSample[],
   energyDaily: [] as EnergyDay[],
+  span: null as SpanInfo | null,
   features: {
     dpiAvailable: false,
     perClientRates: false,
@@ -62,6 +64,7 @@ const state = {
     upsAvailable: false,
     controllerAvailable: false,
     powerwallAvailable: false,
+    spanAvailable: false,
   } as Features,
   featuresDirty: false,
 };
@@ -163,6 +166,26 @@ function diffPowerwall(prev: PowerwallInfo | null, next: PowerwallInfo, ts: numb
   }
 }
 
+function diffSpan(prev: SpanInfo | null, next: SpanInfo, ts: number): void {
+  if (!prev) return;
+  if (prev.reachable && !next.reachable) {
+    events.push({ ts, severity: 'warn', kind: 'span.unreachable', subject: 'SPAN', message: 'SPAN panel stopped publishing' });
+    return;
+  }
+  if (!prev.reachable && next.reachable) {
+    events.push({ ts, severity: 'info', kind: 'span.reachable', subject: 'SPAN', message: 'SPAN panel is publishing again' });
+  }
+  const before = new Map(prev.circuits.map((c) => [c.id, c.relay]));
+  for (const c of next.circuits) {
+    const was = before.get(c.id);
+    if (was === 'CLOSED' && c.relay === 'OPEN') {
+      events.push({ ts, severity: 'warn', kind: 'span.circuit-off', subject: c.name, message: `${c.name} circuit switched off` });
+    } else if (was === 'OPEN' && c.relay === 'CLOSED') {
+      events.push({ ts, severity: 'info', kind: 'span.circuit-on', subject: c.name, message: `${c.name} circuit switched on` });
+    }
+  }
+}
+
 export const store = {
   setSource(source: 'live' | 'mock'): void {
     state.source = source;
@@ -209,6 +232,7 @@ export const store = {
       powerwall?: PowerwallInfo;
       powerwallSample?: PowerwallSample;
       energyDaily?: EnergyDay[];
+      span?: SpanInfo;
     },
     ts: number = Date.now(),
   ): void {
@@ -219,6 +243,7 @@ export const store = {
     if (input.devices) diffDevices(state.devices, input.devices, ts);
     if (input.ups) diffUps(state.ups, input.ups, ts);
     if (input.powerwall) diffPowerwall(state.powerwall, input.powerwall, ts);
+    if (input.span) diffSpan(state.span, input.span, ts);
 
     state.wans = input.wans;
     if (input.usageDaily) state.usageDaily = input.usageDaily;
@@ -231,6 +256,7 @@ export const store = {
     if (input.ups) state.ups = input.ups;
     if (input.powerwall) state.powerwall = input.powerwall;
     if (input.energyDaily) state.energyDaily = input.energyDaily;
+    if (input.span) state.span = input.span;
     if (input.powerwallSample) {
       state.powerwallHistory.push(input.powerwallSample);
       trim(state.powerwallHistory, POWERWALL_HISTORY_MAX);
@@ -331,6 +357,7 @@ export const store = {
       ...(input.powerwall ? { powerwall: input.powerwall } : {}),
       ...(input.powerwallSample ? { powerwallSample: input.powerwallSample } : {}),
       ...(input.energyDaily ? { energyDaily: input.energyDaily } : {}),
+      ...(input.span ? { span: input.span } : {}),
       ...(shipped.length > 0 ? { events: shipped } : {}),
       ...(state.featuresDirty ? { features: { ...state.features } } : {}),
     };
@@ -373,6 +400,7 @@ export const store = {
       powerwall: state.powerwall,
       powerwallHistory: state.powerwallHistory.slice(),
       energyDaily: state.energyDaily,
+      span: state.span,
       events: events.recent(50),
       features: { ...state.features },
     };

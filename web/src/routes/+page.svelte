@@ -18,6 +18,7 @@
   import EnergyNowPage from '$lib/pages/EnergyNowPage.svelte';
   import EnergyTodayPage from '$lib/pages/EnergyTodayPage.svelte';
   import EnergyHistoryPage from '$lib/pages/EnergyHistoryPage.svelte';
+  import CircuitsPage from '$lib/pages/CircuitsPage.svelte';
   import '../app.css';
 
   /** The kiosk shell: a persistent status bar, an exceptions strip that only
@@ -39,6 +40,7 @@
    *  UPS page is shared (id 'power', so UPS alerts point at it here too). */
   const ENERGY_PAGES: PageDef[] = [
     { id: 'energy', label: 'Now', component: EnergyNowPage },
+    { id: 'circuits', label: 'Circuits', component: CircuitsPage, available: () => panel.features.spanAvailable },
     { id: 'today', label: 'Today', component: EnergyTodayPage },
     { id: 'history', label: 'History', component: EnergyHistoryPage },
     { id: 'power', label: 'UPS', component: PowerPage, available: () => panel.features.upsAvailable },
@@ -78,7 +80,7 @@
   const progress = $derived(paused || pages.length < 2 ? 0 : Math.min(1, (now - enteredAt) / dwellMs));
   const alerts = $derived(
     energyMode
-      ? deriveEnergyAlerts({ powerwall: panel.powerwall, ups: panel.ups, features: panel.features, connection: panel.connection, now })
+      ? deriveEnergyAlerts({ powerwall: panel.powerwall, span: panel.span, ups: panel.ups, features: panel.features, connection: panel.connection, now })
       : deriveAlerts({
       wans: panel.wans,
       devices: panel.devices,
