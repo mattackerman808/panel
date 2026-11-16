@@ -283,4 +283,57 @@
     font-size: 0.82rem;
     color: var(--ink-2);
   }
+
+  /* Compact (COMPACT_QUERY): one column. The AP table scrolls sideways with
+     the AP name pinned; the client list drops the AP/band and dBm columns
+     (the signal bars stay); the channel plan stacks its bands. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .wireless {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
+    .table {
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+    }
+    .table > .row {
+      min-width: 62rem;
+      grid-template-columns: 9rem 6rem minmax(8rem, 1fr) minmax(8rem, 1fr) minmax(8rem, 1fr) 4.5rem 5.5rem minmax(7rem, 0.9fr) 5rem;
+    }
+    .table > .row > :first-child {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      margin: -0.5rem 0 -0.5rem -0.5rem;
+      padding: 0.5rem;
+      background: var(--surface);
+      box-shadow: 1px 0 0 var(--line);
+    }
+    .table.clients-table {
+      overflow-x: visible;
+    }
+    .clients-table > .row {
+      min-width: 0;
+      grid-template-columns: 1.4rem minmax(0, 1fr) 4.5rem 5.5rem;
+    }
+    .clients-table > .row > :first-child {
+      position: static;
+      margin: 0;
+      padding: 0;
+      background: none;
+      box-shadow: none;
+    }
+    .clients-table > .row > :nth-child(3),
+    .clients-table > .row > :nth-child(4) {
+      display: none;
+    }
+    .bands {
+      grid-template-columns: minmax(0, 1fr);
+      height: auto;
+    }
+  }
 </style>

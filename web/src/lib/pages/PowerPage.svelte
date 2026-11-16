@@ -5,10 +5,15 @@
   import Stat from '$lib/components/Stat.svelte';
   import Meter from '$lib/components/Meter.svelte';
   import Sparkline from '$lib/components/Sparkline.svelte';
+  import { MediaQuery } from 'svelte/reactivity';
+  import { COMPACT_QUERY } from '$lib/ui';
 
   /** UPS state. The headline is the power source; everything else is the
    *  electrical detail and an hour of load / line-voltage history. */
   let { active = true }: { active?: boolean } = $props();
+  /** Trend height: fills the kiosk row; on a phone a short strip will do. */
+  const compact = new MediaQuery(COMPACT_QUERY, false);
+  const trendH = $derived(compact.current ? 120 : 260);
 
   const ups = $derived(panel.ups);
   const configured = $derived(panel.features.upsAvailable);
@@ -96,7 +101,7 @@
         {#if loadRange}<span>{num(loadRange.min)}–{num(loadRange.max)}%</span>{/if}
       {/snippet}
       <div class="trend">
-        <Sparkline values={loadHist} min={0} max={100} height={260} color="var(--accent)" />
+        <Sparkline values={loadHist} min={0} max={100} height={trendH} color="var(--accent)" />
         <div class="trend-foot"><span>0%</span><span>100%</span></div>
       </div>
     </Panel>
@@ -107,7 +112,7 @@
         {#if voltRange}<span>{num(voltRange.min)}–{num(voltRange.max)} V</span>{/if}
       {/snippet}
       <div class="trend">
-        <Sparkline values={voltHist} height={260} color="var(--accent)" />
+        <Sparkline values={voltHist} height={trendH} color="var(--accent)" />
         <div class="trend-foot"><span>Line voltage</span><span>{num(ups.inputVoltage)} V now</span></div>
       </div>
     </Panel>
@@ -115,7 +120,7 @@
     <Panel title="Output power">
       {#snippet meta()}<span>Last hour</span>{/snippet}
       <div class="trend">
-        <Sparkline values={powerHist} min={0} height={260} color="var(--tx)" />
+        <Sparkline values={powerHist} min={0} height={trendH} color="var(--tx)" />
         <div class="trend-foot"><span>Watts</span><span>{num(ups.outputPowerW)} W now</span></div>
       </div>
     </Panel>
@@ -164,5 +169,25 @@
     justify-content: space-between;
     font-size: 0.72rem;
     color: var(--ink-3);
+  }
+
+  /* Compact (COMPACT_QUERY): one column; the trends are drawn shorter
+     (trendH). */
+  @media (max-width: 900px), (max-height: 500px) {
+    .power {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
+    .hero {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem 1.2rem;
+    }
+    .hero > :global(.stat:first-child) {
+      grid-column: 1 / -1;
+    }
+    .trend {
+      height: auto;
+    }
   }
 </style>

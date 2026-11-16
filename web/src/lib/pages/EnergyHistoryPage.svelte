@@ -136,4 +136,19 @@
     grid-column: 1 / -1;
     padding-left: 1.25rem;
   }
+
+  /* Compact (COMPACT_QUERY): totals first, then the two charts. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .history {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
+    .history > :global(.sum-panel) {
+      order: -1;
+    }
+    .history > :global(.panel:not(.sum-panel)) {
+      height: 16rem;
+    }
+  }
 </style>

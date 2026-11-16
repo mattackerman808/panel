@@ -141,4 +141,17 @@
     grid-column: 1 / -1;
     padding-left: 1.25rem;
   }
+
+  /* Compact (COMPACT_QUERY): one column; the flow diagram sizes itself
+     from its width. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .now {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
+    .battery {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
 </style>

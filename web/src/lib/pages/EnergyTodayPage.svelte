@@ -89,4 +89,16 @@
     align-items: center;
     gap: 0.4rem;
   }
+
+  /* Compact (COMPACT_QUERY): the four charts stacked, each a fixed height. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .today {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
+    .today > :global(.panel) {
+      height: 15rem;
+    }
+  }
 </style>

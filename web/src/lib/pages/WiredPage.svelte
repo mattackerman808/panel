@@ -263,4 +263,50 @@
     color: var(--ink);
     font-weight: 600;
   }
+
+  /* Compact (COMPACT_QUERY): one column. The switch table scrolls sideways
+     with the switch name pinned; link rows fold onto two lines. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .wired {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
+    .table {
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+    }
+    .table > .row {
+      min-width: 66rem;
+      grid-template-columns: 9rem minmax(14rem, 2.4fr) minmax(9rem, 1.1fr) 7rem minmax(7.5rem, 0.9fr) 4.5rem 4rem 4rem 5rem;
+    }
+    .table > .row > :first-child {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      margin: -0.5rem 0 -0.5rem -0.5rem;
+      padding: 0.5rem;
+      background: var(--surface);
+      box-shadow: 1px 0 0 var(--line);
+    }
+    .link {
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.3rem 0.8rem;
+    }
+    .link > :nth-child(1) {
+      grid-area: 1 / 1;
+    }
+    .link > :nth-child(2) {
+      grid-area: 2 / 1;
+    }
+    .link > :nth-child(3) {
+      grid-area: 1 / 2;
+    }
+    .link > :nth-child(4) {
+      grid-area: 2 / 2;
+    }
+  }
 </style>

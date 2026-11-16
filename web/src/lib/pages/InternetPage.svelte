@@ -75,4 +75,15 @@
   .traffic {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  /* Compact (COMPACT_QUERY): everything in one column. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .internet,
+    .wans,
+    .traffic {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+    }
+  }
 </style>

@@ -2,6 +2,7 @@
   import type { PowerwallInfo } from '$lib/types';
   import { batteryDirection, gridDirection } from '$lib/derive';
   import { formatW, num } from '$lib/format';
+  import { MediaQuery } from 'svelte/reactivity';
 
   /** Live power flow: solar (top), grid (left), home (right) and the
    *  Powerwall (bottom) meet at a hub. A moving dash shows each active flow's
@@ -11,17 +12,24 @@
   type Props = { pw: PowerwallInfo; active?: boolean };
   let { pw, active = true }: Props = $props();
 
-  const W = 640;
+  /** On a portrait phone the drawing is narrowed and its type enlarged (the
+   *  `big` class), so it doesn't scale down to unreadable 6px labels. A
+   *  landscape phone has the width; there the drawing is only capped in
+   *  height (see the styles). */
+  const narrow = new MediaQuery('(max-width: 600px)', false);
+  const W = $derived(narrow.current ? 480 : 640);
   const H = 440;
   const R = 54;
-  const hub = { x: W / 2, y: H / 2 };
-  const nodes = {
+  /** Baseline gap from a node's name to its direction word. */
+  const LINE = $derived(narrow.current ? 22 : 17);
+  type Key = 'solar' | 'grid' | 'home' | 'battery';
+  const hub = $derived({ x: W / 2, y: H / 2 });
+  const nodes = $derived<Record<Key, { x: number; y: number }>>({
     solar: { x: W / 2, y: 74 },
-    grid: { x: 104, y: H / 2 },
-    home: { x: W - 104, y: H / 2 },
+    grid: { x: narrow.current ? 76 : 104, y: H / 2 },
+    home: { x: W - (narrow.current ? 76 : 104), y: H / 2 },
     battery: { x: W / 2, y: H - 74 },
-  } as const;
-  type Key = keyof typeof nodes;
+  });
 
   /** Flow in watts along node→hub (positive) or hub→node (negative). */
   const flows = $derived<Record<Key, number>>({
@@ -87,7 +95,7 @@
   });
 </script>
 
-<div class="flow" class:paused={!active}>
+<div class="flow" class:paused={!active} class:big={narrow.current}>
   <svg viewBox="0 0 {W} {H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Power flow: solar {value.solar.value} {value.solar.unit}, home {value.home.value} {value.home.unit}, grid {direction.grid} {value.grid.value} {value.grid.unit}, Powerwall {direction.battery} at {num(pw.chargePct)}%">
     {#each edges as e (e.k)}
       <line class="track" x1={nodes[e.k].x} y1={nodes[e.k].y} x2={hub.x} y2={hub.y} />
@@ -119,7 +127,7 @@
           <text class="v" x={n.x} y={n.y + 8}>{value[k].value}<tspan class="u" dx="3">{value[k].unit}</tspan></text>
         {/if}
         <text class="name" x={at.x} y={at.y} text-anchor={at.anchor}>{label[k]}</text>
-        <text class="dir" x={at.x} y={at.y + 17} text-anchor={at.anchor}>{direction[k]}</text>
+        <text class="dir" x={at.x} y={at.y + LINE} text-anchor={at.anchor}>{direction[k]}</text>
       </g>
     {/each}
   </svg>
@@ -238,5 +246,28 @@
     font-family: var(--font-ui);
     font-size: 13px;
     fill: var(--ink-3);
+  }
+  /* Compact: the narrower drawing scales down less; the type scales up. */
+  .big .v {
+    font-size: 32px;
+  }
+  .big .u,
+  .big .v2 {
+    font-size: 15px;
+  }
+  .big .name {
+    font-size: 18px;
+  }
+  .big .dir {
+    font-size: 17px;
+  }
+  @media (max-width: 900px), (max-height: 500px) {
+    .flow {
+      height: auto;
+    }
+    svg {
+      height: auto;
+      max-height: 26rem;
+    }
   }
 </style>

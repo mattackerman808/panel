@@ -66,4 +66,15 @@
   .chip.more {
     color: var(--ink-3);
   }
+  /* Compact (COMPACT_QUERY): chips wrap instead of running off the edge. */
+  @media (max-width: 900px), (max-height: 500px) {
+    .strip {
+      flex-wrap: wrap;
+      margin: 0 0.75rem;
+    }
+    .chip {
+      white-space: normal;
+      border-radius: var(--r-card);
+    }
+  }
 </style>
