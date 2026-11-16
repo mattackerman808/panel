@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
@@ -18,7 +18,24 @@ export async function createServer() {
 
   const distPath = resolve(__dirname, '..', config.webDistPath);
   if (existsSync(distPath)) {
-    await app.register(fastifyStatic, { root: distPath, prefix: '/' });
+    // One build serves both kiosks. The page names its home-screen icon and
+    // app title, so for energy.* hosts swap those to the energy set before
+    // sending it — iOS reads them from the HTML when adding to the home
+    // screen. (Apache proxies with ProxyPreserveHost, so Host is the real
+    // name.)
+    const indexPath = resolve(distPath, 'index.html');
+    const page = existsSync(indexPath) ? readFileSync(indexPath, 'utf8') : null;
+    const energyPage = page
+      ?.replaceAll('icons/panel', 'icons/energy')
+      .replace('name="apple-mobile-web-app-title" content="Panel"', 'name="apple-mobile-web-app-title" content="Energy"');
+    if (page) {
+      app.get('/', async (req, reply) => {
+        const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '');
+        reply.type('text/html; charset=utf-8').header('cache-control', 'no-cache');
+        return host.startsWith('energy.') ? energyPage : page;
+      });
+    }
+    await app.register(fastifyStatic, { root: distPath, prefix: '/', index: page ? false : undefined });
   } else {
     app.get('/', async (_req, reply) => {
       reply.type('text/plain');
