@@ -461,6 +461,10 @@ export type UiConfig = {
   dwellMs: number;
   /** Display name on the energy kiosk (energy.* hostname / ?view=energy). */
   energySiteName?: string;
+  /** The SPAN circuit the rack UPS is plugged in behind, so the energy
+   *  kiosk can split that circuit into the UPS's measured load and the
+   *  rest (PANEL_UPS_CIRCUIT). Null when not configured. */
+  upsCircuit?: { name: string; upsLabel: string; restLabel: string } | null;
 };
 
 export type Snapshot = {

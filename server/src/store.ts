@@ -383,6 +383,7 @@ export const store = {
         pages: config.ui.pages,
         dwellMs: config.ui.dwellMs,
         energySiteName: config.powerwall.siteName,
+        upsCircuit: config.ui.upsCircuit,
       },
       wans: state.wans,
       histories: Object.fromEntries(Object.entries(state.histories).map(([k, v]) => [k, v.slice()])),

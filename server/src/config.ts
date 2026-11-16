@@ -61,6 +61,16 @@ export const config = {
     // the Pi's autostart URL plain. Null = the client's default order.
     pages: uiPages.length > 0 ? uiPages : null,
     dwellMs: num(process.env.PANEL_UI_DWELL_MS, 24_000),
+    // A SPAN circuit (by name) that feeds the rack UPS. The energy kiosk
+    // splits that circuit into the UPS's measured output and the rest —
+    // useful when the circuit is an unmetered subpanel.
+    upsCircuit: process.env.PANEL_UPS_CIRCUIT
+      ? {
+          name: process.env.PANEL_UPS_CIRCUIT,
+          upsLabel: process.env.PANEL_UPS_CIRCUIT_LABEL ?? 'Server cabinet',
+          restLabel: process.env.PANEL_UPS_CIRCUIT_REST ?? 'Everything else',
+        }
+      : null,
   },
   udm: {
     host: process.env.UDM_HOST ?? '',

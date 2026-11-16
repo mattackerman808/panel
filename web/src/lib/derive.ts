@@ -184,53 +184,113 @@ export function deriveEnergyAlerts(s: EnergyAlertInput): Alert[] {
   return finalizeAlerts(out);
 }
 
-// --- whole-home power flow (sources → panel → circuits) ---
+// --- circuit flow (sources → panel → each circuit) ---
 
-export type FlowNode = { key: string; label: string; watts: number; color: string; detail?: string };
-export type Flow = { sources: FlowNode[]; sinks: FlowNode[]; inW: number; outW: number };
+export type CircuitRow = {
+  key: string;
+  name: string;
+  /** Live draw, W (consumption positive). */
+  watts: number;
+  todayWh: number | null;
+  /** Breaker capacity in W (rating × 120 V × poles), when known. */
+  capacityW: number | null;
+  ratingA: number | null;
+  kind: 'circuit' | 'other' | 'unmetered';
+  /** Drawing enough to animate (and to not be dimmed). */
+  active: boolean;
+  off: boolean;
+  /** Known split of this circuit's draw (e.g. the rack UPS's measured
+   *  output vs the rest of an unmetered subpanel). Sums to `watts`. */
+  parts?: Array<{ label: string; watts: number; measured: boolean }>;
+};
 
-/** Below this a flow isn't drawn (meter noise, idle inverters). */
-const FLOW_MIN_W = 15;
+export type UpsCircuit = { name: string; upsLabel: string; restLabel: string };
 
-/** Where the home's power comes from and where it goes, for the Sankey.
- *  Sources and the grid/battery sinks come from the Powerwall (its four
- *  meters balance); the load side is broken out by SPAN circuit. Circuits
- *  that feed the panel (the Powerwall's backfeed breaker) are skipped so
- *  storage isn't counted twice, and any gap between the Powerwall's home
- *  total and the circuit sum is shown as "Unmetered" rather than hidden.
- *  Past `maxCircuits`, the smallest circuits fold into one "Other" sink. */
-export function deriveFlow(pw: PowerwallInfo | null, span: SpanInfo | null, maxCircuits = 8): Flow | null {
-  const gridW = pw?.gridW ?? span?.gridW ?? null;
-  if (gridW == null) return null;
-  const solar = pw?.solarW ?? 0;
-  const battery = pw?.batteryW ?? 0;
-  const sources: FlowNode[] = [
-    { key: 'solar', label: 'Solar', watts: solar, color: 'var(--solar)' },
-    { key: 'battery', label: 'Powerwall', watts: Math.max(0, battery), color: 'var(--battery)', detail: 'discharging' },
-    { key: 'grid', label: 'Grid', watts: Math.max(0, gridW), color: 'var(--grid)', detail: 'importing' },
-  ].filter((n) => n.watts >= FLOW_MIN_W);
+/** A circuit drawing less than this reads as idle (standby, meter noise). */
+export const CIRCUIT_ACTIVE_W = 15;
 
-  const sinks: FlowNode[] = [];
-  const loads = (span?.reachable ? span.circuits : []).filter((c) => !c.source && c.powerW >= FLOW_MIN_W).sort((a, b) => b.powerW - a.powerW);
-  const shown = loads.length > maxCircuits + 1 ? loads.slice(0, maxCircuits) : loads;
-  const rest = loads.slice(shown.length);
-  for (const c of shown) sinks.push({ key: `c:${c.id}`, label: c.name, watts: c.powerW, color: 'var(--home)' });
-  if (rest.length) {
-    sinks.push({ key: 'c:other', label: `${rest.length} other circuits`, watts: rest.reduce((a, c) => a + c.powerW, 0), color: 'var(--home)' });
+const firstSpace = (spaces: string) => Number.parseInt(spaces.split(',')[0] ?? '', 10) || 999;
+
+/** Rows for the circuit flow diagram, in breaker order so the layout stays
+ *  put instead of reshuffling with every change in load. Circuits that
+ *  feed the panel (the Powerwall's backfeed breaker) are left out — they
+ *  are drawn as the Powerwall source. Past `maxRows`, the idlest circuits
+ *  fold into one "other circuits" row. When the Powerwall's home total
+ *  exceeds the circuit sum, the gap gets its own "Unmetered" row. */
+export function circuitRows(
+  span: SpanInfo | null,
+  pw: PowerwallInfo | null,
+  opts: { maxRows?: number; ups?: UpsInfo | null; upsCircuit?: UpsCircuit | null } = {},
+): CircuitRow[] {
+  const maxRows = opts.maxRows ?? 14;
+  if (!span) return [];
+  const upsW = opts.ups?.reachable ? opts.ups.outputPowerW : null;
+  const upsOn = opts.upsCircuit?.name.trim().toLowerCase() ?? null;
+  const loads = span.circuits.filter((c) => !c.source);
+  let keep = loads;
+  let folded: typeof loads = [];
+  if (loads.length > maxRows) {
+    const byDraw = loads.slice().sort((a, b) => b.powerW - a.powerW);
+    keep = byDraw.slice(0, maxRows - 1);
+    folded = byDraw.slice(maxRows - 1);
   }
-  const metered = loads.reduce((a, c) => a + c.powerW, 0);
-  const home = pw?.homeW ?? (span?.reachable ? metered : 0);
-  if (loads.length === 0 && home >= FLOW_MIN_W) sinks.push({ key: 'home', label: 'Home', watts: home, color: 'var(--home)' });
-  else if (home - metered >= FLOW_MIN_W * 4) sinks.push({ key: 'unmetered', label: 'Unmetered', watts: home - metered, color: 'var(--ink-3)', detail: 'home total minus circuits' });
-  if (battery <= -FLOW_MIN_W) sinks.push({ key: 'charge', label: 'Powerwall', watts: -battery, color: 'var(--battery)', detail: 'charging' });
-  if (gridW <= -FLOW_MIN_W) sinks.push({ key: 'export', label: 'Grid', watts: -gridW, color: 'var(--grid)', detail: 'exporting' });
-
-  return {
-    sources,
-    sinks,
-    inW: sources.reduce((a, n) => a + n.watts, 0),
-    outW: sinks.reduce((a, n) => a + n.watts, 0),
-  };
+  const rows: CircuitRow[] = keep
+    .slice()
+    .sort((a, b) => firstSpace(a.spaces) - firstSpace(b.spaces))
+    .map((c) => {
+      const poles = c.spaces.split(',').filter(Boolean).length || 1;
+      const watts = Math.max(0, c.powerW);
+      return {
+        key: c.id,
+        name: c.name,
+        watts,
+        todayWh: c.todayWh,
+        capacityW: c.ratingA ? c.ratingA * 120 * poles : null,
+        ratingA: c.ratingA,
+        kind: 'circuit',
+        active: watts >= CIRCUIT_ACTIVE_W && c.relay !== 'OPEN',
+        off: c.relay === 'OPEN',
+        // The UPS reports its OUTPUT; its conversion loss lands in "rest".
+        ...(upsOn && upsW != null && c.name.trim().toLowerCase() === upsOn
+          ? {
+              parts: [
+                { label: opts.upsCircuit!.upsLabel, watts: Math.min(upsW, watts), measured: true },
+                { label: opts.upsCircuit!.restLabel, watts: Math.max(0, watts - upsW), measured: false },
+              ],
+            }
+          : {}),
+      };
+    });
+  if (folded.length) {
+    const watts = folded.reduce((a, c) => a + Math.max(0, c.powerW), 0);
+    const known = folded.filter((c) => c.todayWh != null);
+    rows.push({
+      key: 'other',
+      name: `${folded.length} other circuits`,
+      watts,
+      todayWh: known.length ? known.reduce((a, c) => a + (c.todayWh ?? 0), 0) : null,
+      capacityW: null,
+      ratingA: null,
+      kind: 'other',
+      active: watts >= CIRCUIT_ACTIVE_W,
+      off: false,
+    });
+  }
+  const metered = loads.reduce((a, c) => a + Math.max(0, c.powerW), 0);
+  if (pw && pw.homeW - metered >= CIRCUIT_ACTIVE_W * 4) {
+    rows.push({
+      key: 'unmetered',
+      name: 'Unmetered',
+      watts: pw.homeW - metered,
+      todayWh: null,
+      capacityW: null,
+      ratingA: null,
+      kind: 'unmetered',
+      active: true,
+      off: false,
+    });
+  }
+  return rows;
 }
 
 /** Direction words for a signed flow, so the UI never relies on a sign or
