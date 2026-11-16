@@ -1,7 +1,7 @@
 <script lang="ts">
   import { panel } from '$lib/store.svelte';
-  import { batteryDirection, gridLabel, selfPoweredPct, THRESHOLDS } from '$lib/derive';
-  import { formatKWh, formatW, num, relativeTime } from '$lib/format';
+  import { backupEstimate, batteryDirection, gridLabel, selfPoweredPct, THRESHOLDS } from '$lib/derive';
+  import { formatKWh, formatUptime, formatW, num, relativeTime } from '$lib/format';
   import Panel from '$lib/components/Panel.svelte';
   import Stat from '$lib/components/Stat.svelte';
   import Meter from '$lib/components/Meter.svelte';
@@ -24,6 +24,17 @@
   const energyEvents = $derived(panel.events.filter((e) => /^(grid|powerwall|ups)\./.test(e.kind)));
 
   const k = (wh: number | undefined) => formatKWh(wh);
+  const backup = $derived(backupEstimate(panel.span, pw));
+  const dur = (min: number | null | undefined) => (min == null ? '—' : formatUptime(min * 60));
+  const backupSub = $derived.by(() => {
+    if (!backup) return '';
+    const parts: string[] = [];
+    if (backup.forecastMin != null) parts.push(`SPAN forecast${backup.confidence ? ` (${backup.confidence.toLowerCase()} confidence)` : ''}`);
+    if (backup.atCurrentMin != null) parts.push(`${dur(backup.atCurrentMin)} at current draw`);
+    else if (pw && pw.solarW >= pw.homeW) parts.push('solar covering the load');
+    if (backup.nextShedMin != null) parts.push(`first shed in ${dur(backup.nextShedMin)}`);
+    return parts.join(' · ');
+  });
   const batt = $derived(formatW(pw?.batteryW));
 </script>
 
@@ -55,6 +66,9 @@
         <Stat label="Charge" value={num(pw.chargePct)} unit="%" size="xl" tone={chargeTone}>
           <Meter value={pw.chargePct} tone={chargeTone === 'none' ? 'ok' : chargeTone} height={8} />
         </Stat>
+        {#if backup}
+          <Stat label="Backup if the grid fails" value={dur(backup.forecastMin ?? backup.atCurrentMin)} size="lg" sub={backupSub} />
+        {/if}
         <Stat label="Charged today" value={k(today?.batteryChargeWh).value} unit="kWh" />
         <Stat label="Discharged today" value={k(today?.batteryDischargeWh).value} unit="kWh" />
       </div>
@@ -103,7 +117,7 @@
   }
   .battery {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.5fr) repeat(2, minmax(0, 0.9fr));
     gap: 1.2rem;
     align-items: start;
     padding: 0.2rem 0 0.4rem;

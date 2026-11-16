@@ -1083,6 +1083,18 @@ function createMockEnergy() {
       frequencyHz: 60 + 0.02 * jitter(t, 814, 10_000),
       doorClosed: true,
       circuits,
+      // SPAN-style forecast: stored energy over an assumed 1.8 kW average
+      // off-grid draw (no circuits set to shed, so no shed tier).
+      backup: {
+        totalMin: Math.round(((f.chargePct / 100) * CAPACITY_WH * 60) / 1_800),
+        nextShedMin: 0,
+        fullChargeTotalMin: Math.round((CAPACITY_WH * 60) / 1_800),
+        fullChargeNextShedMin: 0,
+        confidence: 'MEDIUM',
+        storedKWh: Math.round((f.chargePct / 100) * (CAPACITY_WH / 1000) * 10) / 10,
+        capacityKWh: CAPACITY_WH / 1000,
+        sheddableCircuits: 0,
+      },
       updatedAt: t,
     };
   }

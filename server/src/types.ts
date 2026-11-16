@@ -402,6 +402,24 @@ export type SpanCircuit = {
   todayWh: number | null;
 };
 
+/** The SPAN panel's off-grid runtime forecast (its own estimate, which
+ *  accounts for load-shed priorities), plus the battery it is based on. */
+export type SpanBackup = {
+  /** Minutes of off-grid runtime from the current charge. */
+  totalMin: number | null;
+  /** Minutes until the next load-shed tier is cut (0/null: none pending). */
+  nextShedMin: number | null;
+  /** The same two estimates from a full battery. */
+  fullChargeTotalMin: number | null;
+  fullChargeNextShedMin: number | null;
+  confidence: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+  /** Stored energy and nameplate capacity of the battery SPAN sees, kWh. */
+  storedKWh: number | null;
+  capacityKWh: number | null;
+  /** Circuits set to shed (priority OFF_GRID or SOC_THRESHOLD). */
+  sheddableCircuits: number;
+};
+
 /** A SPAN smart panel, normalized from its local eBus/MQTT tree. Site
  *  identity the panel publishes (street address, coordinates) is
  *  deliberately not carried. */
@@ -420,6 +438,8 @@ export type SpanInfo = {
   frequencyHz: number | null;
   doorClosed: boolean | null;
   circuits: SpanCircuit[];
+  /** Null when the panel publishes no forecast (no battery commissioned). */
+  backup: SpanBackup | null;
   updatedAt: number;
 };
 
