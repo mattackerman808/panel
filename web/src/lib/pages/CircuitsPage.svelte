@@ -16,13 +16,18 @@
    *  circuit (live draw, today's energy, breaker load), with today's energy
    *  ranked by circuit and the electrical service at the main lugs. */
   let { active = true }: { active?: boolean } = $props();
-  /** On a phone the diagram's text would be a few pixels tall: list instead. */
+  /** On a phone the diagram's text would be a few pixels tall: there the
+   *  flow is drawn top-down as a ranked list instead. */
   const compact = new MediaQuery(COMPACT_QUERY, false);
 
   const span = $derived(panel.span);
   const configured = $derived(panel.features.spanAvailable);
   const live = $derived(!!span && span.reachable);
-  const rows = $derived(circuitRows(span, panel.powerwall, { ups: panel.ups, upsCircuit: panel.ui.upsCircuit ?? null }));
+  // The phone list scrolls, so it shows every circuit instead of folding
+  // the idlest into "other circuits".
+  const rows = $derived(
+    circuitRows(span, panel.powerwall, { ups: panel.ups, upsCircuit: panel.ui.upsCircuit ?? null, maxRows: compact.current ? 99 : undefined }),
+  );
   const today = $derived<RankedRow[]>(
     (span?.circuits ?? [])
       .filter((c) => !c.source && c.todayWh != null && c.todayWh > 0)
@@ -57,7 +62,7 @@
         <span>{live ? `updated ${relativeTime(span.updatedAt)}` : 'SPAN not publishing'}</span>
       {/snippet}
       {#if compact.current}
-        <CircuitList {rows} />
+        <CircuitList pw={panel.powerwall} {span} {rows} {active} />
       {:else}
         <CircuitFlow pw={panel.powerwall} {span} {rows} {active} />
       {/if}
