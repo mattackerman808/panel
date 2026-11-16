@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { panel } from '$lib/store.svelte';
-  import { batteryDirection, gridDirection, gridLabel, type Alert } from '$lib/derive';
+  import { backupEstimate, batteryDirection, gridDirection, gridLabel, type Alert } from '$lib/derive';
   import { formatClock, formatDate, formatUptime, formatW, num } from '$lib/format';
 
   /** The energy kiosk's status bar: where the home's power is coming from
@@ -31,6 +31,8 @@
   const grid = $derived(formatW(pw?.gridW));
   const battery = $derived(formatW(pw?.batteryW));
 
+  const backup = $derived(backupEstimate(panel.span, pw));
+  const backupLeft = $derived(backup?.forecastMin ?? backup?.atCurrentMin ?? null);
   const ups = $derived(panel.ups);
   const upsTone = $derived(!ups || !ups.reachable ? 'warn' : ups.onBattery ? 'crit' : 'ok');
   const upsLabel = $derived(!ups || !ups.reachable ? 'No UPS data' : ups.onBattery ? 'On battery' : 'On mains');
@@ -50,7 +52,7 @@
     <span class="eyebrow">Grid</span>
     <span class="display big"><span class="dot {gridTone}"></span> {live ? gridLabel(pw!.grid) : 'No data'}</span>
     <span class="sub">
-      {#if live && pw!.voltageV != null}{num(pw!.voltageV)} V · {num(pw!.frequencyHz, 2)} Hz{:else}Powerwall gateway{/if}
+      {#if live && pw!.grid === 'islanded' && backupLeft != null}backup ~{formatUptime(backupLeft * 60)} left{:else if live && pw!.voltageV != null}{num(pw!.voltageV)} V · {num(pw!.frequencyHz, 2)} Hz{:else}Powerwall gateway{/if}
     </span>
   </div>
 

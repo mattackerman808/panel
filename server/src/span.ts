@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import mqtt, { type MqttClient } from 'mqtt';
 import { fetch as undiciFetch } from 'undici';
-import type { SpanCircuit, SpanInfo } from './types.js';
+import type { SpanBackup, SpanCircuit, SpanInfo } from './types.js';
 
 /** SPAN smart panel over its local v2 API (spanio/SPAN-API-Client-Docs).
  *
@@ -144,6 +144,7 @@ export class SpanClient {
     const panel = this.devicesOfType('distribution-enclosure')[0]?.[1];
     if (!panel) return null;
     const up = this.devicesOfType('lugs').find(([, p]) => p.get('info/direction') === 'UPSTREAM')?.[1];
+    const bess = this.devicesOfType('bess')[0]?.[1];
     const state = panel.get('$state');
 
     const circuits: SpanCircuit[] = this.devicesOfType('circuit').map(([id, p]) => {
@@ -179,7 +180,28 @@ export class SpanClient {
       frequencyHz: num(panel.get('meter/frequency')),
       doorClosed: panel.has('door/state') ? panel.get('door/state') === 'CLOSED' : null,
       circuits,
+      backup: this.backup(panel, bess),
       updatedAt: this.lastMessageAt,
+    };
+  }
+
+  private backup(panel: Map<string, string>, bess: Map<string, string> | undefined): SpanBackup | null {
+    if (!panel.has('shed-forecast/total-time-remaining') && !bess) return null;
+    const conf = panel.get('shed-forecast/confidence');
+    let sheddable = 0;
+    for (const [, p] of this.devicesOfType('circuit')) {
+      const pr = p.get('load-shed/priority');
+      if (pr === 'OFF_GRID' || pr === 'SOC_THRESHOLD') sheddable++;
+    }
+    return {
+      totalMin: num(panel.get('shed-forecast/total-time-remaining')),
+      nextShedMin: num(panel.get('shed-forecast/time-to-priority-shed')),
+      fullChargeTotalMin: num(panel.get('shed-forecast/full-charge-total-time-remaining')),
+      fullChargeNextShedMin: num(panel.get('shed-forecast/full-charge-time-to-priority-shed')),
+      confidence: conf === 'LOW' || conf === 'MEDIUM' || conf === 'HIGH' ? conf : null,
+      storedKWh: num(bess?.get('soc/soe')),
+      capacityKWh: num(bess?.get('info/nameplate-capacity')),
+      sheddableCircuits: sheddable,
     };
   }
 }

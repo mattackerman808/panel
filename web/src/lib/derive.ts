@@ -1,5 +1,5 @@
 import { buildTopology, type TopoEdge } from './topology.js';
-import { bps, pct, shortName } from './format.js';
+import { bps, formatUptime, pct, shortName } from './format.js';
 import type { Band, ClientStat, DeviceType, EnergyDay, NetworkDevice, PowerwallInfo, SpanInfo, UpsInfo, Wan, Features, EventSeverity } from './types.js';
 
 /** Pure derivations over the snapshot: what needs attention, fleet rollups,
@@ -171,7 +171,11 @@ export function deriveEnergyAlerts(s: EnergyAlertInput): Alert[] {
     if (!p || !p.reachable) add('warn', 'Powerwall', 'gateway not answering', 'energy');
     else {
       if (s.now - p.updatedAt > THRESHOLDS.powerwallStaleMs) add('warn', 'Powerwall', 'readings are stale', 'energy');
-      if (p.grid === 'islanded') add('crit', 'Grid', 'outage — home running on Powerwall', 'energy');
+      if (p.grid === 'islanded') {
+        const b = backupEstimate(s.span ?? null, p);
+        const left = b?.forecastMin ?? b?.atCurrentMin ?? null;
+        add('crit', 'Grid', `outage — home running on Powerwall${left != null ? `, ~${formatUptime(left * 60)} backup left` : ''}`, 'energy');
+      }
       if (p.chargePct != null && p.chargePct < THRESHOLDS.powerwallChargeCritPct) add('crit', 'Powerwall', `charge ${pct(p.chargePct)}`, 'energy');
       else if (p.chargePct != null && p.chargePct < THRESHOLDS.powerwallChargeWarnPct) add('warn', 'Powerwall', `charge ${pct(p.chargePct)}`, 'energy');
     }
@@ -182,6 +186,38 @@ export function deriveEnergyAlerts(s: EnergyAlertInput): Alert[] {
   }
   if (s.features.upsAvailable) upsAlerts(s.ups, add);
   return finalizeAlerts(out);
+}
+
+// --- backup runtime ---
+
+export type BackupEstimate = {
+  /** SPAN's forecast (accounts for load-shed tiers), minutes. */
+  forecastMin: number | null;
+  /** Plain arithmetic: stored energy over the live draw net of solar. Null
+   *  when solar covers the load (no drain) or the stored energy is unknown. */
+  atCurrentMin: number | null;
+  confidence: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+  /** Minutes to the next shed tier, only when circuits are set to shed. */
+  nextShedMin: number | null;
+  storedKWh: number | null;
+};
+
+/** How long the house could run off-grid: SPAN's forecast as the headline
+ *  and a naive "at current draw" figure beside it — they differ because
+ *  SPAN assumes a typical load, while an evening with the hot tub and EV
+ *  charger running drains much faster. */
+export function backupEstimate(span: SpanInfo | null, pw: PowerwallInfo | null): BackupEstimate | null {
+  const b = span?.reachable ? span.backup : null;
+  if (!b) return null;
+  const drainW = pw ? Math.max(0, pw.homeW - pw.solarW) : null;
+  const atCurrentMin = b.storedKWh != null && drainW != null && drainW >= 50 ? Math.round((b.storedKWh * 1000 * 60) / drainW) : null;
+  return {
+    forecastMin: b.totalMin != null && b.totalMin > 0 ? b.totalMin : null,
+    atCurrentMin,
+    confidence: b.confidence,
+    nextShedMin: b.sheddableCircuits > 0 && b.nextShedMin != null && b.nextShedMin > 0 ? b.nextShedMin : null,
+    storedKWh: b.storedKWh,
+  };
 }
 
 // --- circuit flow (sources → panel → each circuit) ---
