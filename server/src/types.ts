@@ -329,6 +329,60 @@ export type UpsSample = {
   chargePct: number | null;
 };
 
+/** Grid connection as the Powerwall gateway reports it. `islanded` means the
+ *  home is running on battery/solar alone (a grid outage, or a deliberate
+ *  off-grid test); `transition` covers the few seconds of switching. */
+export type GridState = 'connected' | 'islanded' | 'transition' | 'unknown';
+
+/** Energy totals for one local calendar day, in watt-hours. Built from
+ *  deltas of the Powerwall's lifetime meter counters. */
+export type EnergyDay = {
+  /** YYYY-MM-DD, local time. */
+  date: string;
+  solarWh: number;
+  homeWh: number;
+  gridImportWh: number;
+  gridExportWh: number;
+  batteryChargeWh: number;
+  batteryDischargeWh: number;
+};
+
+/** Live state of a Tesla Powerwall site, normalized from the gateway's
+ *  local API. Power fields are watts with Tesla's sign conventions:
+ *  gridW > 0 importing / < 0 exporting; batteryW > 0 discharging /
+ *  < 0 charging; solarW and homeW are >= 0. */
+export type PowerwallInfo = {
+  reachable: boolean;
+  grid: GridState;
+  /** Raw gateway string, e.g. SystemGridConnected, kept for display/debug. */
+  gridStatusRaw: string | null;
+  gridServicesActive: boolean;
+  gridW: number;
+  batteryW: number;
+  homeW: number;
+  solarW: number;
+  /** State of charge, scaled to match the Tesla app (the gateway keeps a
+   *  hidden 5% floor). */
+  chargePct: number | null;
+  voltageV: number | null;
+  frequencyHz: number | null;
+  /** Totals so far for the current local day (null until the first day
+   *  boundary has been seen, i.e. the counters have a baseline). */
+  today: EnergyDay | null;
+  /** When the gateway last answered, ms epoch. */
+  updatedAt: number;
+};
+
+/** One-minute average of the Powerwall flows, for the 24h chart. */
+export type PowerwallSample = {
+  ts: number;
+  solarW: number;
+  homeW: number;
+  gridW: number;
+  batteryW: number;
+  chargePct: number | null;
+};
+
 export type EventSeverity = 'info' | 'warn' | 'crit';
 
 /** A state change the server noticed (device offline, WAN down, UPS on
@@ -352,6 +406,8 @@ export type Features = {
   upsAvailable: boolean;
   /** True while the UniFi controller API is reachable. */
   controllerAvailable: boolean;
+  /** A Powerwall gateway is configured (POWERWALL_HOST). */
+  powerwallAvailable: boolean;
 };
 
 export type UiConfig = {
@@ -361,6 +417,8 @@ export type UiConfig = {
   pages: string[] | null;
   /** Auto-rotation dwell per page, in ms. */
   dwellMs: number;
+  /** Display name on the energy kiosk (energy.* hostname / ?view=energy). */
+  energySiteName?: string;
 };
 
 export type Snapshot = {
@@ -386,6 +444,11 @@ export type Snapshot = {
   health: HealthSubsystem[];
   ups: UpsInfo | null;
   upsHistory: UpsSample[];
+  powerwall: PowerwallInfo | null;
+  /** Trailing 24h of one-minute averages, oldest first. */
+  powerwallHistory: PowerwallSample[];
+  /** Trailing ~31 days of daily energy totals, oldest first (today last). */
+  energyDaily: EnergyDay[];
   events: PanelEvent[];
   features: Features;
 };
@@ -405,6 +468,9 @@ export type Tick = {
   health?: HealthSubsystem[];
   ups?: UpsInfo;
   upsSample?: UpsSample;
+  powerwall?: PowerwallInfo;
+  powerwallSample?: PowerwallSample;
+  energyDaily?: EnergyDay[];
   /** Events raised during this tick (already appended to the log). */
   events?: PanelEvent[];
   /** Sent whenever a subsystem comes up or goes away. */

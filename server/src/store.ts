@@ -5,12 +5,15 @@ import type {
   DailyUsage,
   DeviceSample,
   DpiCategory,
+  EnergyDay,
   EventSeverity,
   Features,
   GatewaySample,
   HealthSubsystem,
   NetworkDevice,
   PanelEvent,
+  PowerwallInfo,
+  PowerwallSample,
   Snapshot,
   Tick,
   UdmInfo,
@@ -29,6 +32,10 @@ const buildId = process.env.PANEL_BUILD_ID ?? startTs.toString(36);
 /** UPS polls every 5s; keep the history at the device cadence instead so an
  *  hour fits in the ring buffer. */
 const UPS_SAMPLE_MIN_GAP_MS = 15_000;
+/** 24h of one-minute Powerwall averages. */
+const POWERWALL_HISTORY_MAX = 24 * 60;
+/** Below this the energy kiosk raises a battery-low event. */
+const POWERWALL_LOW_PCT = 15;
 
 const state = {
   source: 'mock' as 'live' | 'mock',
@@ -45,12 +52,16 @@ const state = {
   health: [] as HealthSubsystem[],
   ups: null as UpsInfo | null,
   upsHistory: [] as UpsSample[],
+  powerwall: null as PowerwallInfo | null,
+  powerwallHistory: [] as PowerwallSample[],
+  energyDaily: [] as EnergyDay[],
   features: {
     dpiAvailable: false,
     perClientRates: false,
     snmpAvailable: false,
     upsAvailable: false,
     controllerAvailable: false,
+    powerwallAvailable: false,
   } as Features,
   featuresDirty: false,
 };
@@ -130,6 +141,28 @@ function diffUps(prev: UpsInfo | null, next: UpsInfo, ts: number): void {
   }
 }
 
+function diffPowerwall(prev: PowerwallInfo | null, next: PowerwallInfo, ts: number): void {
+  if (!prev) return;
+  const subject = 'Powerwall';
+  if (prev.reachable && !next.reachable) {
+    events.push({ ts, severity: 'warn', kind: 'powerwall.unreachable', subject, message: 'Powerwall gateway stopped answering' });
+    return;
+  }
+  if (!prev.reachable && next.reachable) {
+    events.push({ ts, severity: 'info', kind: 'powerwall.reachable', subject, message: 'Powerwall gateway is reachable again' });
+  }
+  // Only clean transitions: 'transition'/'unknown' readings are skipped so a
+  // switchover raises exactly one outage and one restore.
+  if (prev.grid === 'connected' && next.grid === 'islanded') {
+    events.push({ ts, severity: 'crit', kind: 'grid.down', subject: 'Grid', message: 'Grid outage — home running on Powerwall' });
+  } else if (prev.grid === 'islanded' && next.grid === 'connected') {
+    events.push({ ts, severity: 'info', kind: 'grid.up', subject: 'Grid', message: 'Grid power restored' });
+  }
+  if (prev.chargePct != null && next.chargePct != null && prev.chargePct >= POWERWALL_LOW_PCT && next.chargePct < POWERWALL_LOW_PCT) {
+    events.push({ ts, severity: 'warn', kind: 'powerwall.low', subject, message: `Powerwall charge below ${POWERWALL_LOW_PCT}%` });
+  }
+}
+
 export const store = {
   setSource(source: 'live' | 'mock'): void {
     state.source = source;
@@ -145,6 +178,13 @@ export const store = {
 
   features(): Features {
     return { ...state.features };
+  },
+
+  /** Load persisted Powerwall history/daily totals at startup (and the
+   *  synthesized ones in mock mode) so the energy charts aren't empty. */
+  seedEnergy(history: PowerwallSample[], daily: EnergyDay[]): void {
+    state.powerwallHistory = history.slice(-POWERWALL_HISTORY_MAX);
+    state.energyDaily = daily;
   },
 
   /** Record an event outside the tick pipeline (poller recovery, startup).
@@ -166,6 +206,9 @@ export const store = {
       devices?: NetworkDevice[];
       health?: HealthSubsystem[];
       ups?: UpsInfo;
+      powerwall?: PowerwallInfo;
+      powerwallSample?: PowerwallSample;
+      energyDaily?: EnergyDay[];
     },
     ts: number = Date.now(),
   ): void {
@@ -175,6 +218,7 @@ export const store = {
     diffWans(state.wans, input.wans, ts);
     if (input.devices) diffDevices(state.devices, input.devices, ts);
     if (input.ups) diffUps(state.ups, input.ups, ts);
+    if (input.powerwall) diffPowerwall(state.powerwall, input.powerwall, ts);
 
     state.wans = input.wans;
     if (input.usageDaily) state.usageDaily = input.usageDaily;
@@ -185,6 +229,12 @@ export const store = {
     if (input.devices) state.devices = input.devices;
     if (input.health) state.health = input.health;
     if (input.ups) state.ups = input.ups;
+    if (input.powerwall) state.powerwall = input.powerwall;
+    if (input.energyDaily) state.energyDaily = input.energyDaily;
+    if (input.powerwallSample) {
+      state.powerwallHistory.push(input.powerwallSample);
+      trim(state.powerwallHistory, POWERWALL_HISTORY_MAX);
+    }
 
     // --- WAN history ---
     const samples: Tick['samples'] = [];
@@ -278,6 +328,9 @@ export const store = {
       ...(input.health ? { health: input.health } : {}),
       ...(input.ups ? { ups: input.ups } : {}),
       ...(upsSample ? { upsSample } : {}),
+      ...(input.powerwall ? { powerwall: input.powerwall } : {}),
+      ...(input.powerwallSample ? { powerwallSample: input.powerwallSample } : {}),
+      ...(input.energyDaily ? { energyDaily: input.energyDaily } : {}),
       ...(shipped.length > 0 ? { events: shipped } : {}),
       ...(state.featuresDirty ? { features: { ...state.features } } : {}),
     };
@@ -298,7 +351,12 @@ export const store = {
       source: state.source,
       serverUptimeSec: Math.floor((Date.now() - startTs) / 1000),
       buildId,
-      ui: { siteName: config.ui.siteName, pages: config.ui.pages, dwellMs: config.ui.dwellMs },
+      ui: {
+        siteName: config.ui.siteName,
+        pages: config.ui.pages,
+        dwellMs: config.ui.dwellMs,
+        energySiteName: config.powerwall.siteName,
+      },
       wans: state.wans,
       histories: Object.fromEntries(Object.entries(state.histories).map(([k, v]) => [k, v.slice()])),
       usageDaily: state.usageDaily,
@@ -312,6 +370,9 @@ export const store = {
       health: state.health,
       ups: state.ups,
       upsHistory: state.upsHistory.slice(),
+      powerwall: state.powerwall,
+      powerwallHistory: state.powerwallHistory.slice(),
+      energyDaily: state.energyDaily,
       events: events.recent(50),
       features: { ...state.features },
     };

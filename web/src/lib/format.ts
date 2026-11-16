@@ -111,3 +111,29 @@ export function num(v: number | null | undefined, digits = 0): string {
 export function shortName(name: string): string {
   return name.replace(/\.[a-z0-9-]+\.[a-z]{2,}$/i, '');
 }
+
+/** Power magnitude: "840 W" below 1 kW, "4.25 kW" / "12.4 kW" above. Sign is
+ *  dropped — callers say the direction in words (importing, charging…). */
+export function formatW(watts: number | null | undefined): Formatted {
+  if (watts == null || !Number.isFinite(watts)) return { value: '—', unit: '' };
+  const w = Math.abs(watts);
+  if (w < 1000) return { value: w.toFixed(0), unit: 'W' };
+  return { value: (w / 1000).toFixed(w >= 10_000 ? 1 : 2), unit: 'kW' };
+}
+
+export function watts(v: number | null | undefined): string {
+  const f = formatW(v);
+  return f.unit ? `${f.value} ${f.unit}` : f.value;
+}
+
+/** Energy in kWh: one decimal under 100, whole numbers above. */
+export function formatKWh(wh: number | null | undefined): Formatted {
+  if (wh == null || !Number.isFinite(wh)) return { value: '—', unit: '' };
+  const k = Math.max(0, wh) / 1000;
+  return { value: k.toFixed(k >= 100 ? 0 : 1), unit: 'kWh' };
+}
+
+export function kwh(wh: number | null | undefined): string {
+  const f = formatKWh(wh);
+  return f.unit ? `${f.value} ${f.unit}` : f.value;
+}

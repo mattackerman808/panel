@@ -3,11 +3,14 @@ import type {
   DailyUsage,
   DeviceSample,
   DpiCategory,
+  EnergyDay,
   Features,
   GatewaySample,
   HealthSubsystem,
   NetworkDevice,
   PanelEvent,
+  PowerwallInfo,
+  PowerwallSample,
   Snapshot,
   Tick,
   UdmInfo,
@@ -24,6 +27,7 @@ type ConnectionState = 'connecting' | 'open' | 'closed' | 'error';
 const MAX_WAN_HISTORY = 600;
 const MAX_DEVICE_HISTORY = 300;
 const MAX_EVENTS = 60;
+const MAX_POWERWALL_HISTORY = 24 * 60;
 
 const DEFAULT_FEATURES: Features = {
   dpiAvailable: false,
@@ -31,6 +35,7 @@ const DEFAULT_FEATURES: Features = {
   snmpAvailable: false,
   upsAvailable: false,
   controllerAvailable: false,
+  powerwallAvailable: false,
 };
 
 const DEFAULT_UI: UiConfig = { siteName: 'Network', pages: null, dwellMs: 24_000 };
@@ -60,6 +65,11 @@ class PanelStore {
   health = $state<HealthSubsystem[]>([]);
   ups = $state<UpsInfo | null>(null);
   upsHistory = $state<UpsSample[]>([]);
+  powerwall = $state<PowerwallInfo | null>(null);
+  /** One-minute averages, trailing 24h, oldest first. */
+  powerwallHistory = $state<PowerwallSample[]>([]);
+  /** Daily energy totals, oldest first. */
+  energyDaily = $state<EnergyDay[]>([]);
   /** Newest first. */
   events = $state<PanelEvent[]>([]);
   features = $state<Features>(DEFAULT_FEATURES);
@@ -96,6 +106,9 @@ class PanelStore {
     this.health = s.health ?? [];
     this.ups = s.ups ?? null;
     this.upsHistory = s.upsHistory ?? [];
+    this.powerwall = s.powerwall ?? null;
+    this.powerwallHistory = tail(s.powerwallHistory ?? [], MAX_POWERWALL_HISTORY);
+    this.energyDaily = s.energyDaily ?? [];
     this.events = (s.events ?? []).slice(0, MAX_EVENTS);
     this.features = { ...DEFAULT_FEATURES, ...(s.features ?? {}) };
     this.lastTickAt = s.ts;
@@ -111,6 +124,9 @@ class PanelStore {
     if (t.devices) this.devices = t.devices;
     if (t.health) this.health = t.health;
     if (t.ups) this.ups = t.ups;
+    if (t.powerwall) this.powerwall = t.powerwall;
+    if (t.energyDaily) this.energyDaily = t.energyDaily;
+    if (t.powerwallSample) this.powerwallHistory = tail([...this.powerwallHistory, t.powerwallSample], MAX_POWERWALL_HISTORY);
     if (t.features) this.features = { ...DEFAULT_FEATURES, ...t.features };
 
     const next = { ...this.histories };
