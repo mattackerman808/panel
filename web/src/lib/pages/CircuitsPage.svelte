@@ -26,7 +26,7 @@
   // The phone list scrolls, so it shows every circuit instead of folding
   // the idlest into "other circuits".
   const rows = $derived(
-    circuitRows(span, panel.powerwall, { ups: panel.ups, upsCircuit: panel.ui.upsCircuit ?? null, maxRows: compact.current ? 99 : undefined }),
+    circuitRows(span, panel.powerwall, { ups: panel.ups, upsCircuit: panel.ui.upsCircuit ?? null, plugInCircuit: panel.ui.plugInSolarCircuit ?? null, maxRows: compact.current ? 99 : undefined }),
   );
   const today = $derived<RankedRow[]>(
     (span?.circuits ?? [])

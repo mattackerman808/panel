@@ -1,6 +1,6 @@
 import { buildTopology, type TopoEdge } from './topology.js';
 import { bps, formatUptime, pct, shortName } from './format.js';
-import type { Band, ClientStat, DeviceType, EnergyDay, NetworkDevice, PowerwallInfo, SpanInfo, UpsInfo, Wan, Features, EventSeverity } from './types.js';
+import type { Band, ClientStat, DeviceType, EnergyDay, MicroinverterInfo, NetworkDevice, PowerwallInfo, SpanCircuit, SpanInfo, UpsInfo, Wan, Features, EventSeverity } from './types.js';
 
 /** Pure derivations over the snapshot: what needs attention, fleet rollups,
  *  link utilization. Kept out of the components so the thresholds live in one
@@ -153,6 +153,7 @@ function finalizeAlerts(out: Alert[]): Alert[] {
 export type EnergyAlertInput = {
   powerwall: PowerwallInfo | null;
   span?: SpanInfo | null;
+  microinverters?: MicroinverterInfo[];
   ups: UpsInfo | null;
   features: Features;
   connection: string;
@@ -183,6 +184,12 @@ export function deriveEnergyAlerts(s: EnergyAlertInput): Alert[] {
   if (s.features.spanAvailable && s.connection === 'open') {
     if (!s.span || !s.span.reachable) add('warn', 'SPAN', 'panel not publishing', 'circuits');
     else for (const c of s.span.circuits) if (c.relay === 'OPEN') add('warn', c.name, 'circuit switched off', 'circuits');
+  }
+  // Inverter alarms only: an EZ1 going quiet is just sunset.
+  for (const m of s.microinverters ?? []) {
+    if (!m.reachable) continue;
+    for (const a of m.alarms) add('warn', m.name, a, 'energy');
+    if (m.outputOn === false) add('warn', m.name, 'output switched off', 'energy');
   }
   if (s.features.upsAvailable) upsAlerts(s.ups, add);
   return finalizeAlerts(out);
@@ -256,17 +263,28 @@ const firstSpace = (spaces: string) => Number.parseInt(spaces.split(',')[0] ?? '
 export function circuitRows(
   span: SpanInfo | null,
   pw: PowerwallInfo | null,
-  opts: { maxRows?: number; ups?: UpsInfo | null; upsCircuit?: UpsCircuit | null } = {},
+  opts: { maxRows?: number; ups?: UpsInfo | null; upsCircuit?: UpsCircuit | null; plugInCircuit?: string | null } = {},
 ): CircuitRow[] {
   const maxRows = opts.maxRows ?? 14;
   if (!span) return [];
   const upsW = opts.ups?.reachable ? opts.ups.outputPowerW : null;
   const upsOn = opts.upsCircuit?.name.trim().toLowerCase() ?? null;
-  const loads = span.circuits.filter((c) => !c.source);
+  // Plug-in solar feeds an outlet, so SPAN meters that circuit NET of it
+  // (and the Powerwall's home figure already has it added back). With the
+  // circuit named, give it its true draw; otherwise keep the output out of
+  // the Unmetered gap — it is measured, just not by SPAN.
+  const plugInW = pw?.plugInSolarW ?? 0;
+  const plugOn = opts.plugInCircuit?.trim().toLowerCase() || null;
+  const isPlugIn = (c: SpanCircuit) => plugOn != null && c.name.trim().toLowerCase() === plugOn;
+  const draw = (c: SpanCircuit) => Math.max(0, c.powerW + (isPlugIn(c) ? plugInW : 0));
+  // The plug-in circuit can backfeed enough to be classed as a source; it
+  // is still a load.
+  const loads = span.circuits.filter((c) => !c.source || isPlugIn(c));
+  const plugInMatched = plugInW > 0 && loads.some(isPlugIn);
   let keep = loads;
   let folded: typeof loads = [];
   if (loads.length > maxRows) {
-    const byDraw = loads.slice().sort((a, b) => b.powerW - a.powerW);
+    const byDraw = loads.slice().sort((a, b) => draw(b) - draw(a));
     keep = byDraw.slice(0, maxRows - 1);
     folded = byDraw.slice(maxRows - 1);
   }
@@ -275,7 +293,7 @@ export function circuitRows(
     .sort((a, b) => firstSpace(a.spaces) - firstSpace(b.spaces))
     .map((c) => {
       const poles = c.spaces.split(',').filter(Boolean).length || 1;
-      const watts = Math.max(0, c.powerW);
+      const watts = draw(c);
       return {
         key: c.id,
         name: c.name,
@@ -295,10 +313,18 @@ export function circuitRows(
               ],
             }
           : {}),
+        ...(isPlugIn(c) && plugInW > 0
+          ? {
+              parts: [
+                { label: 'From panel', watts: Math.max(0, c.powerW), measured: true },
+                { label: 'From plug-in', watts: Math.min(plugInW, watts), measured: true },
+              ],
+            }
+          : {}),
       };
     });
   if (folded.length) {
-    const watts = folded.reduce((a, c) => a + Math.max(0, c.powerW), 0);
+    const watts = folded.reduce((a, c) => a + draw(c), 0);
     const known = folded.filter((c) => c.todayWh != null);
     rows.push({
       key: 'other',
@@ -312,7 +338,7 @@ export function circuitRows(
       off: false,
     });
   }
-  const metered = loads.reduce((a, c) => a + Math.max(0, c.powerW), 0);
+  const metered = loads.reduce((a, c) => a + draw(c), 0) + (plugInMatched ? 0 : plugInW);
   if (pw && pw.homeW - metered >= CIRCUIT_ACTIVE_W * 4) {
     rows.push({
       key: 'unmetered',

@@ -21,7 +21,13 @@
     pw?.chargePct == null ? 'none' : pw.chargePct < THRESHOLDS.powerwallChargeCritPct ? 'crit' : pw.chargePct < THRESHOLDS.powerwallChargeWarnPct ? 'warn' : 'none',
   );
   const gridTone = $derived(!live ? 'warn' : pw!.grid === 'connected' ? 'ok' : pw!.grid === 'islanded' ? 'crit' : 'warn');
-  const energyEvents = $derived(panel.events.filter((e) => /^(grid|powerwall|ups)\./.test(e.kind)));
+  const energyEvents = $derived(panel.events.filter((e) => /^(grid|powerwall|ups|solar)\./.test(e.kind)));
+  // Plug-in (balcony) solar is already inside pw.solarW and today.solarWh;
+  // these only say how much of it came from there.
+  const plugIn = $derived(panel.features.microinvertersAvailable ? panel.microinverters : []);
+  const plugInW = $derived(pw?.plugInSolarW ?? 0);
+  const plugInTodayWh = $derived(plugIn.reduce((a, m) => a + (m.todayWh ?? 0), 0));
+  const plugInLive = $derived(formatW(plugInW));
 
   const k = (wh: number | undefined) => formatKWh(wh);
   const backup = $derived(backupEstimate(panel.span, pw));
@@ -55,6 +61,9 @@
     <Panel title="Power flow" tone={gridTone} class="flow-panel">
       {#snippet meta()}
         <span>{gridLabel(pw.grid)}</span>
+        {#if plugIn.length}
+          <span>{plugIn.some((m) => m.reachable) ? `incl. plug-in solar ${plugInLive.value} ${plugInLive.unit}` : 'plug-in solar asleep'}</span>
+        {/if}
         <span>{live ? `updated ${relativeTime(pw.updatedAt)}` : 'gateway not answering'}</span>
       {/snippet}
       <PowerFlow {pw} {active} />
@@ -78,7 +87,7 @@
       {#snippet meta()}<span>since midnight</span>{/snippet}
       {#if today}
         <div class="totals">
-          <div class="t"><span class="swatch s-solar"></span><Stat label="Solar produced" value={k(today.solarWh).value} unit="kWh" size="lg" /></div>
+          <div class="t"><span class="swatch s-solar"></span><Stat label="Solar produced" value={k(today.solarWh).value} unit="kWh" size="lg" sub={plugIn.length ? `incl. ${k(plugInTodayWh).value} kWh plug-in` : undefined} /></div>
           <div class="t"><span class="swatch s-home"></span><Stat label="Home used" value={k(today.homeWh).value} unit="kWh" size="lg" /></div>
           <div class="t"><span class="swatch s-grid"></span><Stat label="From grid" value={k(today.gridImportWh).value} unit="kWh" /></div>
           <div class="t"><span class="swatch s-grid"></span><Stat label="To grid" value={k(today.gridExportWh).value} unit="kWh" /></div>

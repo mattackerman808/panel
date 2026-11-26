@@ -12,6 +12,7 @@ import type {
   HealthSubsystem,
   NetworkDevice,
   PanelEvent,
+  MicroinverterInfo,
   PowerwallInfo,
   PowerwallSample,
   Snapshot,
@@ -57,6 +58,7 @@ const state = {
   powerwallHistory: [] as PowerwallSample[],
   energyDaily: [] as EnergyDay[],
   span: null as SpanInfo | null,
+  microinverters: [] as MicroinverterInfo[],
   features: {
     dpiAvailable: false,
     perClientRates: false,
@@ -65,6 +67,7 @@ const state = {
     controllerAvailable: false,
     powerwallAvailable: false,
     spanAvailable: false,
+    microinvertersAvailable: false,
   } as Features,
   featuresDirty: false,
 };
@@ -166,6 +169,23 @@ function diffPowerwall(prev: PowerwallInfo | null, next: PowerwallInfo, ts: numb
   }
 }
 
+/** Inverter alarms only. Reachability is deliberately not evented: an EZ1
+ *  runs off its panels and drops off the network every night. */
+function diffMicroinverters(prev: MicroinverterInfo[], next: MicroinverterInfo[], ts: number): void {
+  const before = new Map(prev.map((m) => [m.host, m]));
+  for (const m of next) {
+    if (!m.reachable) continue;
+    const was = new Set(before.get(m.host)?.alarms ?? []);
+    for (const a of m.alarms) {
+      if (!was.has(a)) events.push({ ts, severity: 'warn', kind: 'solar.alarm', subject: m.name, message: `${m.name}: ${a}` });
+    }
+    const now = new Set(m.alarms);
+    for (const a of was) {
+      if (!now.has(a)) events.push({ ts, severity: 'info', kind: 'solar.alarm-clear', subject: m.name, message: `${m.name}: ${a} cleared` });
+    }
+  }
+}
+
 function diffSpan(prev: SpanInfo | null, next: SpanInfo, ts: number): void {
   if (!prev) return;
   if (prev.reachable && !next.reachable) {
@@ -233,6 +253,7 @@ export const store = {
       powerwallSample?: PowerwallSample;
       energyDaily?: EnergyDay[];
       span?: SpanInfo;
+      microinverters?: MicroinverterInfo[];
     },
     ts: number = Date.now(),
   ): void {
@@ -244,6 +265,7 @@ export const store = {
     if (input.ups) diffUps(state.ups, input.ups, ts);
     if (input.powerwall) diffPowerwall(state.powerwall, input.powerwall, ts);
     if (input.span) diffSpan(state.span, input.span, ts);
+    if (input.microinverters) diffMicroinverters(state.microinverters, input.microinverters, ts);
 
     state.wans = input.wans;
     if (input.usageDaily) state.usageDaily = input.usageDaily;
@@ -257,6 +279,7 @@ export const store = {
     if (input.powerwall) state.powerwall = input.powerwall;
     if (input.energyDaily) state.energyDaily = input.energyDaily;
     if (input.span) state.span = input.span;
+    if (input.microinverters) state.microinverters = input.microinverters;
     if (input.powerwallSample) {
       state.powerwallHistory.push(input.powerwallSample);
       trim(state.powerwallHistory, POWERWALL_HISTORY_MAX);
@@ -358,6 +381,7 @@ export const store = {
       ...(input.powerwallSample ? { powerwallSample: input.powerwallSample } : {}),
       ...(input.energyDaily ? { energyDaily: input.energyDaily } : {}),
       ...(input.span ? { span: input.span } : {}),
+      ...(input.microinverters ? { microinverters: input.microinverters } : {}),
       ...(shipped.length > 0 ? { events: shipped } : {}),
       ...(state.featuresDirty ? { features: { ...state.features } } : {}),
     };
@@ -384,6 +408,7 @@ export const store = {
         dwellMs: config.ui.dwellMs,
         energySiteName: config.powerwall.siteName,
         upsCircuit: config.ui.upsCircuit,
+        plugInSolarCircuit: config.ui.plugInSolarCircuit,
       },
       wans: state.wans,
       histories: Object.fromEntries(Object.entries(state.histories).map(([k, v]) => [k, v.slice()])),
@@ -402,6 +427,7 @@ export const store = {
       powerwallHistory: state.powerwallHistory.slice(),
       energyDaily: state.energyDaily,
       span: state.span,
+      microinverters: state.microinverters,
       events: events.recent(50),
       features: { ...state.features },
     };

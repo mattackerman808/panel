@@ -17,6 +17,7 @@ import type {
   Wan,
   WanStatus,
 } from './types.js';
+import { Ez1Client } from './apsystems.js';
 import { EnergyLedger, PowerwallClient } from './powerwall.js';
 import { SpanClient } from './span.js';
 import { UpsClient } from './ups.js';
@@ -151,6 +152,7 @@ export async function startPoller(): Promise<void> {
       controllerAvailable: unifiOk,
       powerwallAvailable: config.powerwall.enabled,
       spanAvailable: config.span.enabled,
+      microinvertersAvailable: config.apsystems.enabled,
     });
   };
   publishFeatures(false);
@@ -182,8 +184,19 @@ export async function startPoller(): Promise<void> {
         insecureTls: config.powerwall.insecureTls,
       })
     : null;
-  const ledger = powerwallClient ? new EnergyLedger() : null;
+  // === Plug-in microinverters (optional). Their output is folded into the
+  //     Powerwall's solar and home figures below — see PowerwallInfo.plugInSolarW. ===
+  const ez1Clients = config.apsystems.hosts.map(
+    (host, i) => new Ez1Client({ host, port: config.apsystems.port, name: config.apsystems.names[i] ?? (config.apsystems.hosts.length > 1 ? `Plug-in solar ${i + 1}` : 'Plug-in solar') }),
+  );
+  let ez1At = 0;
+  let ez1Shipped = '';
+  if (ez1Clients.length) console.log(`[poller] APsystems EZ1 enabled at ${config.apsystems.hosts.join(', ')}`);
+
+  const ledger = powerwallClient || ez1Clients.length ? new EnergyLedger() : null;
   let lastPowerwall: PowerwallInfo | null = null;
+  /** A Powerwall reading from this tick, before plug-in solar is folded in. */
+  let pwFresh: Omit<PowerwallInfo, 'today'> | null = null;
   let powerwallSample: PowerwallSample | null = null;
   let powerwallAt = 0;
   let energyDay = '';
@@ -544,8 +557,7 @@ export async function startPoller(): Promise<void> {
           .poll()
           .then(({ counters, ...r }) => {
             if (counters) ledger.addCounters(counters);
-            powerwallSample = ledger.addReading(r, r.updatedAt) ?? powerwallSample;
-            lastPowerwall = { ...r, today: ledger.today() };
+            pwFresh = r;
           })
           .catch((e) => {
             lastPowerwall = lastPowerwall ? { ...lastPowerwall, reachable: false } : null;
@@ -553,7 +565,43 @@ export async function startPoller(): Promise<void> {
           }),
       );
     }
+    // EZ1s: fire and forget. A reply takes up to ~2 s per request (and a
+    // dead one the full timeout), so they never sit in the tick's await —
+    // each result lands in the client and is read on the next tick.
+    if (ez1Clients.length && now - ez1At >= config.poll.apsystemsMs) {
+      ez1At = now;
+      for (const c of ez1Clients) {
+        // poll() itself never rejects; the catch keeps a bug in the booking
+        // from becoming an unhandled rejection (which would kill the server).
+        void c
+          .poll()
+          .then((reading) => {
+            if (reading && reading.lifetimeWh != null && ledger) ledger.addPlugIn(reading.info.host, reading.lifetimeWh, !!powerwallClient);
+          })
+          .catch((e) => console.error('[apsystems] booking error', e instanceof Error ? e.message : e));
+      }
+    }
     await Promise.all(tasks);
+
+    const inverters = ez1Clients.map((c) => {
+      const m = c.current();
+      const wh = ledger?.plugInToday(m.host) ?? null;
+      return { ...m, todayWh: wh == null ? null : Math.round(wh) };
+    });
+    const plugInW = inverters.reduce((a, m) => a + (m.reachable ? m.powerW : 0), 0);
+    if (pwFresh && ledger) {
+      // The gateway reads plug-in output as less home load: add it back to
+      // home, and count it as solar. Grid and battery are already right.
+      const r: Omit<PowerwallInfo, 'today'> = ez1Clients.length
+        ? { ...pwFresh, solarW: pwFresh.solarW + plugInW, homeW: pwFresh.homeW + plugInW, plugInSolarW: plugInW }
+        : pwFresh;
+      powerwallSample = ledger.addReading(r, r.updatedAt) ?? powerwallSample;
+      lastPowerwall = { ...r, today: ledger.today() };
+      pwFresh = null;
+    }
+    const invertersSig = JSON.stringify(inverters);
+    const invertersOut = invertersSig !== ez1Shipped ? inverters : undefined;
+    ez1Shipped = invertersSig;
 
     // Daily energy ships when a minute closes (today's bar grows) or the
     // date rolls over; the ledger itself is flushed to disk once a minute.
@@ -671,6 +719,7 @@ export async function startPoller(): Promise<void> {
       powerwallSample: powerwallSample ?? undefined,
       energyDaily,
       span: spanClient?.info() ?? undefined,
+      ...(invertersOut ? { microinverters: invertersOut } : {}),
     });
     usageDailyOut = null;
     powerwallSample = null;
@@ -704,6 +753,7 @@ async function startMockPoller(): Promise<void> {
     controllerAvailable: true,
     powerwallAvailable: true,
     spanAvailable: true,
+    microinvertersAvailable: true,
   });
   world.seedEvents((e) => store.recordEvent(e));
 
@@ -734,7 +784,7 @@ async function startMockPoller(): Promise<void> {
         ...(usageDue ? { usageDaily: world.usageDaily(t) } : {}),
         ...(clientsDue ? { clients: world.clients(t), dpi: apps, dpiCategories: categories } : {}),
         ...(slow ? { devices: world.devices(t), udm: world.udm(t), health: world.health(wans, t), ups: world.ups(t) } : {}),
-        ...(powerwallDue ? { powerwall: world.powerwall(t), span: world.span(t) } : {}),
+        ...(powerwallDue ? { powerwall: world.powerwall(t), span: world.span(t), microinverters: world.microinverters(t) } : {}),
         ...(minuteClosed ? { powerwallSample: world.powerwallSample(closedMinute), energyDaily: world.energyDaily(t) } : {}),
       },
       t,

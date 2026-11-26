@@ -371,6 +371,44 @@ export type PowerwallInfo = {
   today: EnergyDay | null;
   /** When the gateway last answered, ms epoch. */
   updatedAt: number;
+  /** Plug-in (balcony) microinverter output already folded into solarW and
+   *  homeW, W. The gateway never sees it as solar: an inverter feeding an
+   *  outlet just reads as less home load, so the server adds it back to
+   *  both. Absent from servers older than the microinverter support. */
+  plugInSolarW?: number;
+};
+
+/** One DC input (panel) on a microinverter. */
+export type MicroinverterChannel = {
+  powerW: number;
+  /** The inverter's own lifetime counter, Wh. */
+  lifetimeWh: number;
+};
+
+/** A plug-in microinverter (APsystems EZ1) read over its local API. It runs
+ *  off its panels, so it is unreachable every night: that is normal, not
+ *  an outage, and raises no event. */
+export type MicroinverterInfo = {
+  /** Inverter serial (deviceId) once known, else the configured host. */
+  id: string;
+  name: string;
+  host: string;
+  reachable: boolean;
+  model: string | null;
+  firmware: string | null;
+  /** Configured output cap, W. */
+  maxPowerW: number | null;
+  /** Live AC output, W (sum of the channels). */
+  powerW: number;
+  channels: MicroinverterChannel[];
+  /** Produced so far in the local day, Wh (null until baselined). */
+  todayWh: number | null;
+  /** Output relay as the inverter reports it; null until read. */
+  outputOn: boolean | null;
+  /** Active alarm descriptions, empty when healthy. */
+  alarms: string[];
+  /** When it last answered, ms epoch (null: not since start). */
+  updatedAt: number | null;
 };
 
 /** One-minute average of the Powerwall flows, for the 24h chart. */
@@ -470,6 +508,8 @@ export type Features = {
   powerwallAvailable: boolean;
   /** A SPAN panel is configured (SPAN_HOST). */
   spanAvailable: boolean;
+  /** Plug-in microinverters are configured (APSYSTEMS_HOSTS). */
+  microinvertersAvailable?: boolean;
 };
 
 export type UiConfig = {
@@ -485,6 +525,10 @@ export type UiConfig = {
    *  kiosk can split that circuit into the UPS's measured load and the
    *  rest (PANEL_UPS_CIRCUIT). Null when not configured. */
   upsCircuit?: { name: string; upsLabel: string; restLabel: string } | null;
+  /** The SPAN circuit the plug-in microinverters feed into
+   *  (PANEL_PLUGIN_SOLAR_CIRCUIT). SPAN reads that circuit net of their
+   *  output, so the kiosk adds it back there. Null when not configured. */
+  plugInSolarCircuit?: string | null;
 };
 
 export type Snapshot = {
@@ -516,6 +560,7 @@ export type Snapshot = {
   /** Trailing ~31 days of daily energy totals, oldest first (today last). */
   energyDaily: EnergyDay[];
   span: SpanInfo | null;
+  microinverters: MicroinverterInfo[];
   events: PanelEvent[];
   features: Features;
 };
@@ -539,6 +584,7 @@ export type Tick = {
   powerwallSample?: PowerwallSample;
   energyDaily?: EnergyDay[];
   span?: SpanInfo;
+  microinverters?: MicroinverterInfo[];
   /** Events raised during this tick (already appended to the log). */
   events?: PanelEvent[];
   /** Sent whenever a subsystem comes up or goes away. */

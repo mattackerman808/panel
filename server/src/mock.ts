@@ -10,6 +10,7 @@ import type {
   NetworkDevice,
   NetworkPort,
   NetworkRadio,
+  MicroinverterInfo,
   PowerwallInfo,
   PowerwallSample,
   SpanCircuit,
@@ -984,7 +985,42 @@ function createMockEnergy() {
       // Today so far, to the last whole minute (cheap enough to recompute).
       today: integrate(label(new Date(t)), start, t - (t % 60_000)),
       updatedAt: t,
+      plugInSolarW: plugInW(t),
     };
+  }
+
+  /** One balcony EZ1 carrying a fixed share of the site's solar (it is
+   *  already inside solarW/homeW, as on the live server), asleep at night. */
+  const PLUG_IN_SHARE = 0.05;
+  function plugInW(t: number): number {
+    return Math.min(1_000, Math.round(solarW(t) * PLUG_IN_SHARE));
+  }
+
+  function microinverters(t: number): MicroinverterInfo[] {
+    const w = plugInW(t);
+    const awake = w > 0;
+    const todayWh = integrate(label(new Date(t)), midnight(t), t - (t % 60_000)).solarWh * PLUG_IN_SHARE;
+    const lifetime = 412_000 + (dayIndex(t) % 1000) * 900;
+    return [
+      {
+        id: 'E2800000MOCK',
+        name: 'Plug-in solar',
+        host: 'ez1.example.org',
+        reachable: awake,
+        model: 'EZ1-LV',
+        firmware: '1.1.8',
+        maxPowerW: 1000,
+        powerW: w,
+        channels: [
+          { powerW: Math.round(w * 0.52), lifetimeWh: lifetime * 0.52 },
+          { powerW: w - Math.round(w * 0.52), lifetimeWh: lifetime * 0.48 },
+        ],
+        todayWh: Math.round(todayWh),
+        outputOn: true,
+        alarms: [],
+        updatedAt: awake ? t : null,
+      },
+    ];
   }
 
   /** The finished one-minute sample at minute `m` (its start time). */
@@ -1052,7 +1088,7 @@ function createMockEnergy() {
       id: c.id,
       name: c.name,
       spaces: c.spaces,
-      powerW: Math.round((spread * (1 - UNMETERED) * weights[i]!) / total + (c.id === 'c-laundry' ? parts.appliance : 0) + (c.id === 'c-sub' ? cabinet : 0)),
+      powerW: Math.round((spread * (1 - UNMETERED) * weights[i]!) / total + (c.id === 'c-laundry' ? parts.appliance : 0) + (c.id === 'c-sub' ? cabinet : 0) - (c.id === 'c-garage' ? plugInW(t) : 0)),
       ratingA: c.ratingA,
       relay: 'CLOSED',
       source: false,
@@ -1062,7 +1098,9 @@ function createMockEnergy() {
       id: 'c-pw',
       name: 'Powerwall',
       spaces: '5,7',
-      powerW: -(f.solarW + f.batteryW),
+      // Roof solar only: the plug-in inverter feeds the Garage outlets,
+      // which SPAN therefore reads net of it (PANEL_PLUGIN_SOLAR_CIRCUIT=Garage).
+      powerW: -(f.solarW - plugInW(t) + f.batteryW),
       ratingA: 60,
       relay: 'CLOSED',
       source: true,
@@ -1099,5 +1137,5 @@ function createMockEnergy() {
     };
   }
 
-  return { powerwall, powerwallSample, powerwallHistory, energyDaily, span };
+  return { powerwall, powerwallSample, powerwallHistory, energyDaily, span, microinverters };
 }
