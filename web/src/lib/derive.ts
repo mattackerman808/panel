@@ -361,7 +361,7 @@ export function circuitRows(
 /** A power source feeding the SPAN panel in the circuit flow. `watts` is
  *  positive into the panel; export and Powerwall charging run negative. */
 export type FlowSource = {
-  key: 'solar' | 'plugin' | 'grid' | 'battery';
+  key: 'solar' | 'grid' | 'battery';
   label: string;
   watts: number;
   dir: string;
@@ -369,7 +369,35 @@ export type FlowSource = {
   idle: boolean;
   /** The grid while islanded. */
   off?: boolean;
+  /** Solar with plug-in microinverters: its two systems, drawn as a split
+   *  ring and named in the caption. Sums to `watts`. */
+  split?: SolarSplit;
 };
+
+export type SolarSplit = { roofW: number; plugInW: number };
+
+/** Tesla (roof) vs plug-in share of the live solar figure; null without
+ *  plug-in microinverters. */
+export function solarSplit(pw: PowerwallInfo | null): SolarSplit | null {
+  if (!pw || pw.plugInSolarW == null) return null;
+  return { roofW: Math.max(0, pw.solarW - pw.plugInSolarW), plugInW: pw.plugInSolarW };
+}
+
+/** Two arcs of a ring (roof first, clockwise from the top) for a split
+ *  solar node: SVG dash pattern + offset per arc, with a small gap between
+ *  them when both are non-zero. `c` is the ring's circumference. */
+export function splitRingArcs(split: SolarSplit, c: number): { roof: { dash: string; offset: number } | null; plugIn: { dash: string; offset: number } | null } {
+  const total = split.roofW + split.plugInW;
+  if (total <= 0) return { roof: null, plugIn: null };
+  const f = split.roofW / total;
+  const gap = f > 0 && f < 1 ? 4 : 0;
+  const roofLen = Math.max(0, c * f - gap);
+  const plugLen = Math.max(0, c * (1 - f) - gap);
+  return {
+    roof: roofLen > 0 ? { dash: `${roofLen.toFixed(1)} ${c.toFixed(1)}`, offset: -gap / 2 } : null,
+    plugIn: plugLen > 0 ? { dash: `${plugLen.toFixed(1)} ${c.toFixed(1)}`, offset: -(c * f + gap / 2) } : null,
+  };
+}
 
 /** Solar, grid and Powerwall as sources for the circuit flow (desktop
  *  diagram and phone list alike). Without the Powerwall gateway only the
@@ -378,15 +406,18 @@ export function flowSources(pw: PowerwallInfo | null, span: SpanInfo): FlowSourc
   const gridW = pw?.gridW ?? span.gridW ?? 0;
   const list: FlowSource[] = [];
   if (pw) {
-    // With plug-in microinverters the roof (Tesla) and the plug-in system
-    // are separate sources; solarW includes both.
-    const plugIn = pw.plugInSolarW;
-    const roof = plugIn != null ? Math.max(0, pw.solarW - plugIn) : pw.solarW;
-    const label = plugIn != null ? 'Tesla solar' : 'Solar';
-    list.push({ key: 'solar', label, watts: roof, dir: roof >= CIRCUIT_ACTIVE_W ? 'producing' : 'idle', color: 'var(--solar)', idle: roof < CIRCUIT_ACTIVE_W });
-    if (plugIn != null) {
-      list.push({ key: 'plugin', label: 'Plug-in solar', watts: plugIn, dir: plugIn >= CIRCUIT_ACTIVE_W ? 'producing' : 'idle', color: 'var(--solar)', idle: plugIn < CIRCUIT_ACTIVE_W });
-    }
+    // One solar source; with plug-in microinverters it carries the split
+    // (roof vs plug-in) for a two-arc ring and a caption.
+    const split = solarSplit(pw);
+    list.push({
+      key: 'solar',
+      label: 'Solar',
+      watts: pw.solarW,
+      dir: pw.solarW >= CIRCUIT_ACTIVE_W ? 'producing' : 'idle',
+      color: 'var(--solar)',
+      idle: pw.solarW < CIRCUIT_ACTIVE_W,
+      ...(split ? { split } : {}),
+    });
   }
   list.push({
     key: 'grid',
@@ -412,10 +443,17 @@ export type SolarSystem = {
   todayWh: number | null;
   /** Highest one-minute average since local midnight, W. */
   peakW: number | null;
-  /** Share of today's total solar, 0–100. */
-  sharePct: number | null;
-  /** One-minute averages since local midnight, for a sparkline. */
+  /** One-minute averages over the shared window (null = not recorded),
+   *  index-aligned across systems so the sparklines share a clock. */
   series: Array<number | null>;
+};
+
+export type SolarComparison = {
+  systems: SolarSystem[];
+  /** Plug-in share of today's solar, 0–100. */
+  plugInSharePct: number | null;
+  /** Start of the sparkline window (first light today, ms epoch). */
+  fromTs: number | null;
 };
 
 /** Split solar into the Tesla (roof) system and the plug-in microinverters.
@@ -427,11 +465,15 @@ export function solarSystems(
   today: EnergyDay | null,
   inverters: MicroinverterInfo[],
   now = Date.now(),
-): SolarSystem[] | null {
+): SolarComparison | null {
   if (!pw || pw.plugInSolarW == null) return null;
   const midnight = new Date(now);
   midnight.setHours(0, 0, 0, 0);
-  const day = history.filter((s) => s.ts >= midnight.getTime());
+  const today0 = history.filter((s) => s.ts >= midnight.getTime());
+  // Window: from 30 minutes before first light (so the night isn't half
+  // the sparkline) to now; both series share it.
+  const firstLight = today0.findIndex((s) => s.solarW >= 30);
+  const day = firstLight < 0 ? today0 : today0.slice(Math.max(0, firstLight - 30));
   const plugSeries = day.map((s) => s.plugInSolarW ?? null);
   const roofSeries = day.map((s) => Math.max(0, s.solarW - (s.plugInSolarW ?? 0)));
   const peak = (xs: Array<number | null>) => {
@@ -442,11 +484,14 @@ export function solarSystems(
   const plugWh = today?.plugInSolarWh ?? fromInverters;
   const roofWh = today ? Math.max(0, today.solarWh - (plugWh ?? 0)) : null;
   const total = today?.solarWh ?? 0;
-  const share = (wh: number | null) => (wh != null && total > 0 ? Math.min(100, (wh / total) * 100) : null);
-  return [
-    { key: 'roof', label: 'Tesla solar', watts: Math.max(0, pw.solarW - pw.plugInSolarW), todayWh: roofWh, peakW: peak(roofSeries), sharePct: share(roofWh), series: roofSeries },
-    { key: 'plugin', label: 'Plug-in solar', watts: pw.plugInSolarW, todayWh: plugWh, peakW: peak(plugSeries), sharePct: share(plugWh), series: plugSeries },
-  ];
+  return {
+    systems: [
+      { key: 'roof', label: 'Tesla', watts: Math.max(0, pw.solarW - pw.plugInSolarW), todayWh: roofWh, peakW: peak(roofSeries), series: roofSeries },
+      { key: 'plugin', label: 'Plug-in', watts: pw.plugInSolarW, todayWh: plugWh, peakW: peak(plugSeries), series: plugSeries },
+    ],
+    plugInSharePct: plugWh != null && total > 0 ? Math.min(100, (plugWh / total) * 100) : null,
+    fromTs: day[0]?.ts ?? null,
+  };
 }
 
 /** Rank keys by value, largest first, with hysteresis: starting from the

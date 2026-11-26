@@ -62,6 +62,10 @@
           {#if s.key === 'battery' && pw?.chargePct != null}
             <span class="src-v display">{num(pw.chargePct)}<span class="u">%</span></span>
             <span class="src-dir">{s.dir}{s.idle ? '' : ` · ${f(s.watts).value} ${f(s.watts).unit}`}</span>
+          {:else if s.split}
+            <span class="src-v display">{f(s.watts).value}<span class="u">{f(s.watts).unit}</span></span>
+            <span class="src-dir">Tesla {f(s.split.roofW).value} {f(s.split.roofW).unit}</span>
+            <span class="src-dir">Plug-in {f(s.split.plugInW).value} {f(s.split.plugInW).unit}</span>
           {:else}
             <span class="src-v display">{f(s.watts).value}<span class="u">{f(s.watts).unit}</span></span>
             <span class="src-dir">{s.dir}</span>
