@@ -313,7 +313,10 @@ export function circuitRows(
               ],
             }
           : {}),
-        ...(isPlugIn(c) && plugInW > 0
+        // When the plug-in feeds the UPS circuit too, the UPS split wins: it
+        // is already computed on the corrected draw, so the outlets' real
+        // load lands in its "rest" share.
+        ...(isPlugIn(c) && plugInW > 0 && !(upsOn && upsW != null && c.name.trim().toLowerCase() === upsOn)
           ? {
               parts: [
                 { label: 'From panel', watts: Math.max(0, c.powerW), measured: true },
