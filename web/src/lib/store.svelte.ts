@@ -8,6 +8,7 @@ import type {
   GatewaySample,
   HealthSubsystem,
   NetworkDevice,
+  MicroinverterInfo,
   PanelEvent,
   PowerwallInfo,
   PowerwallSample,
@@ -38,6 +39,7 @@ const DEFAULT_FEATURES: Features = {
   controllerAvailable: false,
   powerwallAvailable: false,
   spanAvailable: false,
+  microinvertersAvailable: false,
 };
 
 const DEFAULT_UI: UiConfig = { siteName: 'Network', pages: null, dwellMs: 24_000 };
@@ -73,6 +75,7 @@ class PanelStore {
   /** Daily energy totals, oldest first. */
   energyDaily = $state<EnergyDay[]>([]);
   span = $state<SpanInfo | null>(null);
+  microinverters = $state<MicroinverterInfo[]>([]);
   /** Newest first. */
   events = $state<PanelEvent[]>([]);
   features = $state<Features>(DEFAULT_FEATURES);
@@ -113,6 +116,7 @@ class PanelStore {
     this.powerwallHistory = tail(s.powerwallHistory ?? [], MAX_POWERWALL_HISTORY);
     this.energyDaily = s.energyDaily ?? [];
     this.span = s.span ?? null;
+    this.microinverters = s.microinverters ?? [];
     this.events = (s.events ?? []).slice(0, MAX_EVENTS);
     this.features = { ...DEFAULT_FEATURES, ...(s.features ?? {}) };
     this.lastTickAt = s.ts;
@@ -131,6 +135,7 @@ class PanelStore {
     if (t.powerwall) this.powerwall = t.powerwall;
     if (t.energyDaily) this.energyDaily = t.energyDaily;
     if (t.span) this.span = t.span;
+    if (t.microinverters) this.microinverters = t.microinverters;
     if (t.powerwallSample) this.powerwallHistory = tail([...this.powerwallHistory, t.powerwallSample], MAX_POWERWALL_HISTORY);
     if (t.features) this.features = { ...DEFAULT_FEATURES, ...t.features };
 

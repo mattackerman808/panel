@@ -71,6 +71,10 @@ export const config = {
           restLabel: process.env.PANEL_UPS_CIRCUIT_REST ?? 'Everything else',
         }
       : null,
+    // The SPAN circuit (by name) the plug-in microinverters feed into. SPAN
+    // meters that circuit net of their output; the energy kiosk adds it
+    // back there instead of leaving the circuit under-read.
+    plugInSolarCircuit: process.env.PANEL_PLUGIN_SOLAR_CIRCUIT?.trim() || null,
   },
   udm: {
     host: process.env.UDM_HOST ?? '',
@@ -103,6 +107,16 @@ export const config = {
     insecureTls: bool(process.env.POWERWALL_INSECURE_TLS, true),
     // Name shown on the energy kiosk's top bar.
     siteName: process.env.PANEL_ENERGY_SITE_NAME ?? process.env.PANEL_SITE_NAME ?? 'Home',
+  },
+  // Plug-in microinverters (APsystems EZ1) over their local HTTP API on
+  // :8050 — enable "Local Mode" (Continuous) in the AP EasyPower app over a
+  // Bluetooth Direct Connection first. Comma-separated hosts; optional
+  // APSYSTEMS_NAMES labels them in the same order. No auth.
+  apsystems: {
+    enabled: list(process.env.APSYSTEMS_HOSTS).length > 0,
+    hosts: list(process.env.APSYSTEMS_HOSTS),
+    names: list(process.env.APSYSTEMS_NAMES),
+    port: num(process.env.APSYSTEMS_PORT, 8050),
   },
   // SPAN smart panel over its local v2 API. Disabled unless SPAN_HOST is
   // set. SPAN_PASSPHRASE comes from the SPAN Home app (On-premise settings
@@ -144,6 +158,9 @@ export const config = {
     // The gateway refreshes its meters about once a second; 5s keeps the
     // flow figures lively without leaning on a small embedded web server.
     powerwallMs: num(process.env.PANEL_POLL_POWERWALL_MS, 5000),
+    // The EZ1 answers in 0.6–2 s over Wi-Fi and only refreshes its figures
+    // every few seconds; 10s, one request at a time, is plenty.
+    apsystemsMs: num(process.env.PANEL_POLL_APSYSTEMS_MS, 10000),
     // How often to re-attempt a subsystem that came up dead. The Pi can
     // start panel.service before eth0 has an address, which used to leave
     // the poller WAN-less (and every chart blank) until a manual restart.

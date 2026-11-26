@@ -190,6 +190,10 @@ type LedgerFile = {
   last: PowerwallCounters | null;
   days: Record<string, EnergyDay>;
   history: PowerwallSample[];
+  /** Plug-in microinverters: last lifetime reading (Wh) per host, and Wh
+   *  booked per local day per host. */
+  plugInLast: Record<string, number>;
+  plugInDays: Record<string, Record<string, number>>;
 };
 
 export function dayLabel(d = new Date()): string {
@@ -226,9 +230,15 @@ export class EnergyLedger {
   private static load(): LedgerFile {
     try {
       const parsed = JSON.parse(readFileSync(ENERGY_PATH, 'utf8')) as Partial<LedgerFile>;
-      return { last: parsed.last ?? null, days: parsed.days ?? {}, history: parsed.history ?? [] };
+      return {
+        last: parsed.last ?? null,
+        days: parsed.days ?? {},
+        history: parsed.history ?? [],
+        plugInLast: parsed.plugInLast ?? {},
+        plugInDays: parsed.plugInDays ?? {},
+      };
     } catch {
-      return { last: null, days: {}, history: [] };
+      return { last: null, days: {}, history: [], plugInLast: {}, plugInDays: {} };
     }
   }
 
@@ -248,6 +258,34 @@ export class EnergyLedger {
     }
     this.state.last = { ...c };
     this.dirty = true;
+  }
+
+  /** Book a plug-in microinverter's lifetime counter. The gateway sees that
+   *  output only as reduced home load, so with `intoSite` the delta is added
+   *  to today's solar AND home totals (grid and battery are already right).
+   *  The inverter sleeps overnight; the first morning reading just resumes
+   *  from the stored baseline. */
+  addPlugIn(host: string, lifetimeWh: number, intoSite: boolean, now = new Date()): void {
+    const last = this.state.plugInLast[host];
+    this.state.plugInLast[host] = lifetimeWh;
+    this.dirty = true;
+    if (last == null) return;
+    const d = lifetimeWh - last;
+    if (d <= 0 || d > MAX_DELTA_WH) return;
+    const date = dayLabel(now);
+    const hosts = (this.state.plugInDays[date] ??= {});
+    hosts[host] = (hosts[host] ?? 0) + d;
+    if (intoSite && this.state.last) {
+      const day = (this.state.days[date] ??= emptyDay(date));
+      day.solarWh += d;
+      day.homeWh += d;
+    }
+  }
+
+  /** Wh a plug-in inverter produced today; null before its first baseline. */
+  plugInToday(host: string, now = new Date()): number | null {
+    if (this.state.plugInLast[host] == null) return null;
+    return this.state.plugInDays[dayLabel(now)]?.[host] ?? 0;
   }
 
   /** Fold a live reading into the current minute; returns the finished
@@ -292,6 +330,8 @@ export class EnergyLedger {
   daily(): EnergyDay[] {
     const dates = Object.keys(this.state.days).sort();
     for (const stale of dates.slice(0, Math.max(0, dates.length - DAYS_KEPT))) delete this.state.days[stale];
+    const plugInDates = Object.keys(this.state.plugInDays).sort();
+    for (const stale of plugInDates.slice(0, Math.max(0, plugInDates.length - DAYS_KEPT))) delete this.state.plugInDays[stale];
     return dates.slice(-DAYS_KEPT).map((d) => ({ ...this.state.days[d]! }));
   }
 

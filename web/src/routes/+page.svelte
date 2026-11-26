@@ -87,7 +87,7 @@
   const progress = $derived(rotating ? Math.min(1, (now - enteredAt) / dwellMs) : 0);
   const alerts = $derived(
     energyMode
-      ? deriveEnergyAlerts({ powerwall: panel.powerwall, span: panel.span, ups: panel.ups, features: panel.features, connection: panel.connection, now })
+      ? deriveEnergyAlerts({ powerwall: panel.powerwall, span: panel.span, microinverters: panel.microinverters, ups: panel.ups, features: panel.features, connection: panel.connection, now })
       : deriveAlerts({
       wans: panel.wans,
       devices: panel.devices,
