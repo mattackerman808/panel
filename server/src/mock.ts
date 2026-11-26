@@ -956,6 +956,7 @@ function createMockEnergy() {
     for (const k of ['solarWh', 'homeWh', 'gridImportWh', 'gridExportWh', 'batteryChargeWh', 'batteryDischargeWh'] as const) {
       day[k] = Math.round(day[k]);
     }
+    day.plugInSolarWh = Math.round(day.solarWh * PLUG_IN_SHARE);
     return day;
   }
 
@@ -1026,7 +1027,15 @@ function createMockEnergy() {
   /** The finished one-minute sample at minute `m` (its start time). */
   function powerwallSample(m: number): PowerwallSample {
     const f = flows(m + 30_000);
-    return { ts: m, solarW: f.solarW, homeW: f.homeW, gridW: f.gridW, batteryW: f.batteryW, chargePct: Math.round(f.chargePct * 10) / 10 };
+    return {
+      ts: m,
+      solarW: f.solarW,
+      homeW: f.homeW,
+      gridW: f.gridW,
+      batteryW: f.batteryW,
+      chargePct: Math.round(f.chargePct * 10) / 10,
+      plugInSolarW: plugInW(m + 30_000),
+    };
   }
 
   /** Minute samples for [from, to), oldest first. */

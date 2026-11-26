@@ -20,7 +20,7 @@
     else if (t && !list.some((d) => d.date === t.date)) list.push(t);
     return list.slice(-DAYS);
   });
-  const sum = (key: keyof Omit<EnergyDay, 'date'>) => days.reduce((a, d) => a + d[key], 0);
+  const sum = (key: keyof Omit<EnergyDay, 'date' | 'plugInSolarWh'>) => days.reduce((a, d) => a + d[key], 0);
   const total = $derived<EnergyDay>({
     date: '',
     solarWh: sum('solarWh'),

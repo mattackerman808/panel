@@ -345,6 +345,9 @@ export type EnergyDay = {
   gridExportWh: number;
   batteryChargeWh: number;
   batteryDischargeWh: number;
+  /** The plug-in microinverters' share of solarWh (absent on days before
+   *  they were tracked). Roof (Tesla) solar is solarWh minus this. */
+  plugInSolarWh?: number;
 };
 
 /** Live state of a Tesla Powerwall site, normalized from the gateway's
@@ -419,6 +422,8 @@ export type PowerwallSample = {
   gridW: number;
   batteryW: number;
   chargePct: number | null;
+  /** Plug-in share of solarW (absent before microinverters were tracked). */
+  plugInSolarW?: number;
 };
 
 /** One breaker position on a SPAN panel. */
