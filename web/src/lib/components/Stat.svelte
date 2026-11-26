@@ -80,6 +80,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* class="wrap-sub": a sentence-long note wraps instead of truncating. */
+  .stat.wrap-sub .sub {
+    white-space: normal;
+    line-height: 1.35;
+  }
   .extra {
     margin-top: 0.15rem;
     min-width: 0;

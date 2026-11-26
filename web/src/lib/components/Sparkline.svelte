@@ -9,9 +9,12 @@
     /** Pin the scale (e.g. 0–100 for percentages). */
     min?: number | null;
     max?: number | null;
+    /** Keep each value at its own index (missing values break the line)
+     *  instead of closing the gaps — for sparklines that share a clock. */
+    indexed?: boolean;
     class?: string;
   };
-  let { values, color = 'var(--rx)', height = 28, fill = true, min = null, max = null, class: cls = '' }: Props = $props();
+  let { values, color = 'var(--rx)', height = 28, fill = true, min = null, max = null, indexed = false, class: cls = '' }: Props = $props();
 
   let width = $state(0);
 
@@ -28,15 +31,31 @@
     const pad = 3;
     const w = width;
     const h = height;
-    const pts = xs.map((v, i) => [pad + (i / (xs.length - 1)) * (w - pad * 2), h - pad - ((v - lo) / range) * (h - pad * 2)] as const);
-    let line = '';
-    for (let i = 0; i < pts.length; i++) {
-      const [x, y] = pts[i]!;
-      line += `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
+    const yOf = (v: number) => h - pad - ((v - lo) / range) * (h - pad * 2);
+    // Runs of consecutive points; a gap (indexed mode only) starts a new run.
+    const runs: Array<Array<readonly [number, number]>> = [];
+    if (indexed) {
+      const n = values.length;
+      let run: Array<readonly [number, number]> | null = null;
+      values.forEach((v, i) => {
+        if (v == null || !Number.isFinite(v)) {
+          run = null;
+          return;
+        }
+        if (!run) runs.push((run = []));
+        run.push([pad + (i / Math.max(1, n - 1)) * (w - pad * 2), yOf(v)] as const);
+      });
+    } else {
+      runs.push(xs.map((v, i) => [pad + (i / (xs.length - 1)) * (w - pad * 2), yOf(v)] as const));
     }
-    const first = pts[0]!;
-    const last = pts[pts.length - 1]!;
-    const area = `${line}L${last[0].toFixed(1)} ${h}L${first[0].toFixed(1)} ${h}Z`;
+    let line = '';
+    let area = '';
+    for (const r of runs) {
+      const seg = r.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`).join('');
+      line += seg;
+      if (r.length > 1) area += `${seg}L${r[r.length - 1]![0].toFixed(1)} ${h}L${r[0]![0].toFixed(1)} ${h}Z`;
+    }
+    const last = runs[runs.length - 1]![runs[runs.length - 1]!.length - 1]!;
     return { line, area, last };
   });
 </script>

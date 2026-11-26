@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PowerwallInfo, SpanInfo } from '$lib/types';
-  import { flowSources, type CircuitRow } from '$lib/derive';
+  import { flowSources, splitRingArcs, type CircuitRow } from '$lib/derive';
   import { formatW, kwh, num } from '$lib/format';
 
   /** The Now page's power flow, carried through the SPAN panel to every
@@ -33,11 +33,9 @@
   const layout = $derived.by(() => {
     const hubH = Math.min(VH * 0.5, 260);
     const hubY = (VH - hubH) / 2;
-    // Sources spread over the middle of the height (a little further with
-    // four — Tesla solar, plug-in solar, grid, Powerwall — so the labels clear).
-    const four = sources.length > 3;
-    const srcTop = VH * (four ? 0.13 : 0.17);
-    const srcSpan = VH * (four ? 0.73 : 0.66);
+    // Sources spread over the middle of the height.
+    const srcTop = VH * 0.17;
+    const srcSpan = VH * 0.66;
     const src = sources.map((s, i) => {
       const y = sources.length === 1 ? VH / 2 : srcTop + (srcSpan * i) / (sources.length - 1);
       // Enter the hub along its left edge, spread to match the order.
@@ -103,12 +101,25 @@
           <circle class="soc" cx={SRC_X} cy={s.y} r={r} stroke-dasharray="{((c * pw.chargePct) / 100).toFixed(1)} {c.toFixed(1)}" transform="rotate(-90 {SRC_X} {s.y})" />
           <text class="v" x={SRC_X} y={s.y + 2}>{num(pw.chargePct)}<tspan class="u" dx="2">%</tspan></text>
           <text class="v2" x={SRC_X} y={s.y + 22}>{f(s.watts).value} {f(s.watts).unit}</text>
+        {:else if s.split}
+          <!-- Solar from two systems: Tesla arc, then the plug-in arc (lighter). -->
+          {@const c = 2 * Math.PI * SRC_R}
+          {@const arcs = splitRingArcs(s.split, c)}
+          <circle class="ring split-track" cx={SRC_X} cy={s.y} r={SRC_R} stroke={s.color} />
+          {#if arcs.roof}<circle class="ring arc" cx={SRC_X} cy={s.y} r={SRC_R} stroke={s.color} stroke-dasharray={arcs.roof.dash} stroke-dashoffset={arcs.roof.offset} transform="rotate(-90 {SRC_X} {s.y})" />{/if}
+          {#if arcs.plugIn}<circle class="ring arc plug" cx={SRC_X} cy={s.y} r={SRC_R} stroke={s.color} stroke-dasharray={arcs.plugIn.dash} stroke-dashoffset={arcs.plugIn.offset} transform="rotate(-90 {SRC_X} {s.y})" />{/if}
+          <text class="v" x={SRC_X} y={s.y + 8}>{f(s.watts).value}<tspan class="u" dx="3">{f(s.watts).unit}</tspan></text>
         {:else}
           <circle class="ring" cx={SRC_X} cy={s.y} r={SRC_R} stroke={s.color} />
           <text class="v" x={SRC_X} y={s.y + 8}>{f(s.watts).value}<tspan class="u" dx="3">{f(s.watts).unit}</tspan></text>
         {/if}
         <text class="name" x={SRC_X} y={s.y + SRC_R + 22}>{s.label}</text>
-        <text class="dir" x={SRC_X} y={s.y + SRC_R + 38}>{s.dir}</text>
+        {#if s.split}
+          <text class="dir" x={SRC_X} y={s.y + SRC_R + 38}>Tesla {f(s.split.roofW).value} {f(s.split.roofW).unit}</text>
+          <text class="dir" x={SRC_X} y={s.y + SRC_R + 54}>Plug-in {f(s.split.plugInW).value} {f(s.split.plugInW).unit}</text>
+        {:else}
+          <text class="dir" x={SRC_X} y={s.y + SRC_R + 38}>{s.dir}</text>
+        {/if}
       </g>
     {/each}
 
@@ -220,6 +231,17 @@
   }
   .src.idle .ring {
     stroke: var(--line-strong);
+  }
+  /* Split solar ring: a faint full track, the Tesla arc, then the plug-in
+     arc at reduced strength so the two read as parts of one source. */
+  .ring.split-track {
+    opacity: 0.18;
+  }
+  .ring.arc.plug {
+    opacity: 0.5;
+  }
+  .src.idle .ring.arc {
+    display: none;
   }
   .src.off .ring {
     stroke: var(--crit);

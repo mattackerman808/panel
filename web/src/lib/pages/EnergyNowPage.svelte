@@ -27,16 +27,18 @@
   // today.solarWh are the two together; null when there's no plug-in.
   const plugIn = $derived(panel.features.microinvertersAvailable ? panel.microinverters : []);
   const plugInAwake = $derived(plugIn.some((m) => m.reachable));
-  const systems = $derived(solarSystems(pw, panel.powerwallHistory, today, plugIn));
+  const cmp = $derived(solarSystems(pw, panel.powerwallHistory, today, plugIn));
+  /** One short line under each system's name: where it's read from, and
+   *  for the plug-in whether it's awake and how many panels are producing. */
   const plugInNote = $derived.by(() => {
-    if (!plugInAwake) return 'asleep · panel not powered';
+    if (!plugInAwake) return 'asleep, no sun on the panel';
     const ch = plugIn.filter((m) => m.reachable).flatMap((m) => m.channels);
     const on = ch.filter((c) => c.powerW > 0).length;
     const model = plugIn.find((m) => m.reachable)?.model ?? 'EZ1';
-    return `${model} · ${on} of ${ch.length} panel inputs producing`;
+    return `${model}, ${on} panel${on === 1 ? '' : 's'} producing`;
   });
-  const peakOf = (w: number | null) => formatW(w ?? undefined);
-  // The plug-in makes well under a kWh a day: show two decimals below 10.
+  const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  // The plug-in makes well under a kWh a day: two decimals below 10 kWh.
   const kwhFine = (wh: number | null) => (wh == null ? '—' : (Math.max(0, wh) / 1000).toFixed(wh < 10_000 ? 2 : 1));
 
   const k = (wh: number | undefined) => formatKWh(wh);
@@ -83,33 +85,40 @@
           <Meter value={pw.chargePct} tone={chargeTone === 'none' ? 'ok' : chargeTone} height={8} />
         </Stat>
         {#if backup}
-          <Stat label="Backup if the grid fails" value={dur(backup.forecastMin ?? backup.atCurrentMin)} size="lg" sub={backupSub} />
+          <Stat label="Backup if the grid fails" value={dur(backup.forecastMin ?? backup.atCurrentMin)} size="lg" sub={backupSub} class="wrap-sub" />
         {/if}
         <Stat label="Charged today" value={k(today?.batteryChargeWh).value} unit="kWh" />
         <Stat label="Discharged today" value={k(today?.batteryDischargeWh).value} unit="kWh" />
       </div>
     </Panel>
 
-    {#if systems}
+    {#if cmp}
       <Panel title="Solar by system">
-        {#snippet meta()}<span>since midnight · each on its own scale</span>{/snippet}
-        <div class="systems">
-          {#each systems as sys (sys.key)}
-            {@const now = formatW(sys.watts)}
-            {@const pk = peakOf(sys.peakW)}
-            <div class="sys">
-              <div class="sys-head">
-                <span class="swatch s-solar"></span>
-                <span class="sys-name">{sys.label}</span>
-                <span class="sys-note">{sys.key === 'roof' ? 'Powerwall gateway' : plugInNote}</span>
+        {#snippet meta()}
+          {#if cmp.plugInSharePct != null}<span>plug-in made {cmp.plugInSharePct < 1 ? cmp.plugInSharePct.toFixed(1) : num(cmp.plugInSharePct)}% of today's solar</span>{/if}
+        {/snippet}
+        <div class="cmp" role="table" aria-label="Solar output by system">
+          <div class="cmp-row head" role="row">
+            <span role="columnheader"><span class="sr">System</span></span>
+            <span class="eyebrow num-h" role="columnheader">Now</span>
+            <span class="eyebrow num-h" role="columnheader">Today</span>
+            <span class="eyebrow num-h" role="columnheader">Peak</span>
+            <span class="eyebrow axis" role="columnheader">
+              <span>{cmp.fromTs ? clock(cmp.fromTs) : 'today'}</span><span>now</span>
+            </span>
+          </div>
+          {#each cmp.systems as sys (sys.key)}
+            {@const nowW = formatW(sys.watts)}
+            {@const pk = formatW(sys.peakW ?? undefined)}
+            <div class="cmp-row" class:quiet={sys.key === 'plugin' && !plugInAwake} role="row">
+              <div class="who" role="rowheader">
+                <span class="name"><span class="swatch s-solar" class:soft={sys.key === 'plugin'}></span>{sys.label}</span>
+                <span class="note">{sys.key === 'roof' ? 'roof, via the Powerwall' : plugInNote}</span>
               </div>
-              <div class="sys-stats">
-                <Stat label="Now" value={now.value} unit={now.unit} size="lg" />
-                <Stat label="Today" value={kwhFine(sys.todayWh)} unit="kWh" />
-                <Stat label="Peak" value={pk.value} unit={pk.unit} />
-                <Stat label="Share" value={sys.sharePct == null ? '—' : num(sys.sharePct)} unit="%" />
-              </div>
-              <Sparkline values={sys.series} color="var(--solar)" height={30} min={0} />
+              <span class="num" role="cell" data-label="Now"><span class="display">{nowW.value}</span><span class="unit">{nowW.unit}</span></span>
+              <span class="num" role="cell" data-label="Today"><span class="display">{kwhFine(sys.todayWh)}</span><span class="unit">kWh</span></span>
+              <span class="num" role="cell" data-label="Peak"><span class="display">{pk.value}</span><span class="unit">{pk.unit}</span></span>
+              <span class="spark" role="cell"><Sparkline values={sys.series} color="var(--solar)" height={34} min={0} indexed /></span>
             </div>
           {/each}
         </div>
@@ -157,43 +166,85 @@
   .now > :global(.flow-panel) {
     grid-row: 1 / -1;
   }
-  .systems {
+  /* Solar by system: a two-row comparison table. Numbers right-aligned in
+     tabular figures; the sparklines share one clock (first light → now),
+     each on its own vertical scale. */
+  .cmp {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1.4rem;
-    padding: 0.2rem 0 0.3rem;
+    grid-template-columns: minmax(8.5rem, 1.15fr) repeat(3, minmax(4.2rem, auto)) minmax(6rem, 1.6fr);
+    column-gap: 1.3rem;
+    row-gap: 0.7rem;
+    align-items: center;
+    padding: 0.1rem 0 0.3rem;
   }
-  .sys {
-    display: grid;
-    gap: 0.55rem;
-    min-width: 0;
+  .cmp-row {
+    display: contents;
   }
-  .sys-head {
+  .cmp-row.head > * {
+    padding-bottom: 0.1rem;
+  }
+  .num-h {
+    text-align: right;
+  }
+  .axis {
     display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
+    justify-content: space-between;
+    letter-spacing: 0.04em;
+    text-transform: none;
+  }
+  .who {
+    display: grid;
+    gap: 0.15rem;
     min-width: 0;
   }
-  .sys-head .swatch {
-    align-self: center;
-  }
-  .sys-name {
+  .name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     color: var(--ink);
     font-weight: 600;
-    white-space: nowrap;
+    font-size: 1.05rem;
   }
-  .sys-note {
+  .swatch.soft {
+    opacity: 0.55;
+  }
+  .note {
     color: var(--ink-3);
-    font-size: 0.85rem;
+    font-size: 0.78rem;
+    padding-left: 1.25rem;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .sys-stats {
-    display: grid;
-    grid-template-columns: minmax(0, 1.3fr) repeat(3, minmax(0, 1fr));
-    gap: 0.8rem;
-    align-items: end;
+  .num {
+    display: flex;
+    justify-content: flex-end;
+    align-items: baseline;
+    gap: 0.22rem;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .num .display {
+    font-size: 1.55rem;
+    color: var(--ink);
+  }
+  .num .unit {
+    font-size: 0.75rem;
+    color: var(--ink-3);
+  }
+  .quiet .num .display,
+  .quiet .name {
+    color: var(--ink-2);
+  }
+  .spark {
+    min-width: 0;
+  }
+  .sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
   }
   .battery {
     display: grid;
@@ -233,12 +284,32 @@
     .battery {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-    .systems {
-      grid-template-columns: minmax(0, 1fr);
-      gap: 1.1rem;
+    /* Each system becomes a block: name, then the three figures labelled
+       in place, then its sparkline full width. */
+    .cmp {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      row-gap: 0.45rem;
     }
-    .sys-note {
-      white-space: normal;
+    .cmp-row.head {
+      display: none;
+    }
+    .who,
+    .spark {
+      grid-column: 1 / -1;
+    }
+    .who {
+      margin-top: 0.5rem;
+    }
+    .num {
+      justify-content: flex-start;
+    }
+    .num::before {
+      content: attr(data-label);
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-right: 0.35rem;
     }
   }
 </style>
