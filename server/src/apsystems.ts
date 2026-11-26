@@ -17,7 +17,15 @@ import type { MicroinverterChannel, MicroinverterInfo } from './types.js';
  *  morning but also after a long cloud; daily energy is therefore taken
  *  from deltas of the lifetime counters (EnergyLedger.addPlugIn), never
  *  from e1/e2. Replies take 0.6–2 s over Wi-Fi, so requests to one
- *  inverter are made one at a time. */
+ *  inverter are made one at a time.
+ *
+ *  Not answering is a normal state, not an error: the inverter powers off
+ *  whenever its panels do (night, heavy shade, a panel unplugged). poll()
+ *  never throws, a silent inverter reads as 0 W / unreachable, and nothing
+ *  downstream (events, alerts) treats that as a fault. Its power-up and
+ *  power-down are noisy too, so alarms and "output off" are only reported
+ *  once it has been awake for WAKE_GRACE_MS and the same flag has been read
+ *  twice in a row. */
 
 type Envelope<T> = { data?: T; message?: string; deviceId?: string };
 type RawInfo = { deviceId?: string; devVer?: string; minPower?: string; maxPower?: string };
@@ -43,6 +51,8 @@ const SLOW_MS = 60_000;
 /** Once it stops answering (dusk), probe at this pace instead of every poll. */
 const ASLEEP_RETRY_MS = 60_000;
 const TIMEOUT_MS = 9_000;
+/** Ignore alarm / output flags for this long after it starts answering. */
+const WAKE_GRACE_MS = 5 * 60_000;
 
 export type Ez1Reading = { info: MicroinverterInfo; lifetimeWh: number | null };
 
@@ -52,6 +62,11 @@ export class Ez1Client {
   private slowAt = 0;
   private retryAt = 0;
   private busy = false;
+  /** When it last started answering; null while asleep. */
+  private awakeSince: number | null = null;
+  /** Previous raw read of the alarm / output flags, for the debounce. */
+  private lastAlarms = new Set<string>();
+  private lastOn: boolean | null = null;
 
   constructor(opts: { host: string; port: number; name: string }) {
     this.base = `http://${opts.host}:${opts.port}`;
@@ -105,17 +120,36 @@ export class Ez1Client {
           this.info.firmware = firmware || null;
           this.info.maxPowerW = n(dev.maxPower);
         }
-        if (alarm) this.info.alarms = Object.entries(alarm).filter(([, v]) => v === '1').map(([k]) => ALARMS[k] ?? k);
-        if (onOff?.status != null) this.info.outputOn = onOff.status === '0';
+        // Debounce: a flag counts once it has been read twice in a row, and
+        // only after the wake-up grace period.
+        const settled = this.awakeSince != null && now - this.awakeSince >= WAKE_GRACE_MS;
+        if (alarm) {
+          const raw = Object.entries(alarm)
+            .filter(([, v]) => v === '1')
+            .map(([k]) => ALARMS[k] ?? k);
+          this.info.alarms = settled ? raw.filter((a) => this.lastAlarms.has(a)) : [];
+          this.lastAlarms = new Set(raw);
+        }
+        if (onOff?.status != null) {
+          const on = onOff.status === '0';
+          // "On" is believed at once; "off" only when settled and read twice.
+          if (on) this.info.outputOn = true;
+          else if (settled && this.lastOn === false) this.info.outputOn = false;
+          this.lastOn = on;
+        }
       }
       const te1 = (n(out.te1) ?? 0) * 1000;
       const te2 = (n(out.te2) ?? 0) * 1000;
-      const lifetime = n(out.te1) != null || n(out.te2) != null ? te1 + te2 : null;
+      // A zero total is a boot-time placeholder, not a real lifetime counter.
+      const lifetime = te1 + te2 > 0 ? te1 + te2 : null;
       const channels: MicroinverterChannel[] = [
         { powerW: Math.max(0, Math.round(n(out.p1) ?? 0)), lifetimeWh: Math.round(te1) },
         { powerW: Math.max(0, Math.round(n(out.p2) ?? 0)), lifetimeWh: Math.round(te2) },
       ];
-      if (!this.info.reachable) console.log(`[apsystems] ${this.info.name} answering`);
+      if (!this.info.reachable) {
+        console.log(`[apsystems] ${this.info.name} awake`);
+        this.awakeSince = now;
+      }
       this.info = {
         ...this.info,
         reachable: true,
@@ -125,11 +159,20 @@ export class Ez1Client {
       };
       return { info: this.info, lifetimeWh: lifetime };
     } catch (e) {
-      // Expected every evening: log the transition, not every retry.
-      if (this.info.reachable) {
-        console.log(`[apsystems] ${this.info.name} stopped answering (${e instanceof Error ? e.message : e}) — normal after dark`);
-      }
-      this.info = { ...this.info, reachable: false, powerW: 0, channels: this.info.channels.map((c) => ({ ...c, powerW: 0 })) };
+      // Expected every evening (and whenever the panels lose power): one
+      // info line on the transition, nothing per retry.
+      if (this.info.reachable) console.log(`[apsystems] ${this.info.name} asleep (not answering: ${e instanceof Error ? e.message : e})`);
+      this.awakeSince = null;
+      this.lastAlarms = new Set();
+      this.lastOn = null;
+      this.info = {
+        ...this.info,
+        reachable: false,
+        powerW: 0,
+        channels: this.info.channels.map((c) => ({ ...c, powerW: 0 })),
+        alarms: [],
+        outputOn: null,
+      };
       this.retryAt = now + ASLEEP_RETRY_MS;
       this.slowAt = 0;
       return { info: this.info, lifetimeWh: null };

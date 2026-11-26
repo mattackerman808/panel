@@ -185,14 +185,18 @@ export const HISTORY_SAMPLES = 24 * 60;
  *  ~140 Wh). Anything larger is a counter reset or a gateway swap: rebase
  *  on the new value instead of booking a fake spike. */
 const MAX_DELTA_WH = 50_000;
+/** Ceiling on one plug-in inverter's output, W (an EZ1 is 800–1200 W). */
+const PLUG_IN_MAX_W = 1_500;
+/** Consecutive backwards readings before accepting a new, lower counter. */
+const PLUG_IN_REBASE_AFTER = 30;
 
 type LedgerFile = {
   last: PowerwallCounters | null;
   days: Record<string, EnergyDay>;
   history: PowerwallSample[];
-  /** Plug-in microinverters: last lifetime reading (Wh) per host, and Wh
-   *  booked per local day per host. */
-  plugInLast: Record<string, number>;
+  /** Plug-in microinverters: last lifetime reading (Wh, and when) per
+   *  host, and Wh booked per local day per host. */
+  plugInLast: Record<string, { wh: number; at: number }>;
   plugInDays: Record<string, Record<string, number>>;
 };
 
@@ -220,6 +224,7 @@ export class EnergyLedger {
   private state: LedgerFile;
   private dirty = false;
   private savedAt = 0;
+  private plugInLow: Record<string, number> = {};
   private minute: { start: number; n: number; solar: number; home: number; grid: number; battery: number; soc: number | null } | null =
     null;
 
@@ -230,11 +235,15 @@ export class EnergyLedger {
   private static load(): LedgerFile {
     try {
       const parsed = JSON.parse(readFileSync(ENERGY_PATH, 'utf8')) as Partial<LedgerFile>;
+      // plugInLast was briefly a bare number per host; drop those.
+      const plugInLast = Object.fromEntries(
+        Object.entries(parsed.plugInLast ?? {}).filter(([, v]) => typeof v === 'object' && v != null && typeof v.wh === 'number'),
+      );
       return {
         last: parsed.last ?? null,
         days: parsed.days ?? {},
         history: parsed.history ?? [],
-        plugInLast: parsed.plugInLast ?? {},
+        plugInLast,
         plugInDays: parsed.plugInDays ?? {},
       };
     } catch {
@@ -266,12 +275,23 @@ export class EnergyLedger {
    *  The inverter sleeps overnight; the first morning reading just resumes
    *  from the stored baseline. */
   addPlugIn(host: string, lifetimeWh: number, intoSite: boolean, now = new Date()): void {
-    const last = this.state.plugInLast[host];
-    this.state.plugInLast[host] = lifetimeWh;
+    const at = now.getTime();
+    const prev = this.state.plugInLast[host];
+    // Ignore a backwards reading (a glitch around power-up) and keep the
+    // baseline — unless it persists, i.e. the inverter was replaced.
+    if (prev && lifetimeWh < prev.wh) {
+      const low = (this.plugInLow[host] = (this.plugInLow[host] ?? 0) + 1);
+      if (low < PLUG_IN_REBASE_AFTER) return;
+    }
+    delete this.plugInLow[host];
+    this.state.plugInLast[host] = { wh: lifetimeWh, at };
     this.dirty = true;
-    if (last == null) return;
-    const d = lifetimeWh - last;
-    if (d <= 0 || d > MAX_DELTA_WH) return;
+    if (!prev) return;
+    const d = lifetimeWh - prev.wh;
+    // No more than the inverter could make since the last reading (the
+    // counter doesn't move while it sleeps); a bigger jump is a rebase.
+    const maxD = (PLUG_IN_MAX_W * Math.max(0, at - prev.at)) / 3_600_000 + 5;
+    if (d <= 0 || d > maxD) return;
     const date = dayLabel(now);
     const hosts = (this.state.plugInDays[date] ??= {});
     hosts[host] = (hosts[host] ?? 0) + d;
@@ -284,7 +304,7 @@ export class EnergyLedger {
 
   /** Wh a plug-in inverter produced today; null before its first baseline. */
   plugInToday(host: string, now = new Date()): number | null {
-    if (this.state.plugInLast[host] == null) return null;
+    if (!this.state.plugInLast[host]) return null;
     return this.state.plugInDays[dayLabel(now)]?.[host] ?? 0;
   }
 

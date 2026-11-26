@@ -571,9 +571,14 @@ export async function startPoller(): Promise<void> {
     if (ez1Clients.length && now - ez1At >= config.poll.apsystemsMs) {
       ez1At = now;
       for (const c of ez1Clients) {
-        void c.poll().then((reading) => {
-          if (reading && reading.lifetimeWh != null && ledger) ledger.addPlugIn(reading.info.host, reading.lifetimeWh, !!powerwallClient);
-        });
+        // poll() itself never rejects; the catch keeps a bug in the booking
+        // from becoming an unhandled rejection (which would kill the server).
+        void c
+          .poll()
+          .then((reading) => {
+            if (reading && reading.lifetimeWh != null && ledger) ledger.addPlugIn(reading.info.host, reading.lifetimeWh, !!powerwallClient);
+          })
+          .catch((e) => console.error('[apsystems] booking error', e instanceof Error ? e.message : e));
       }
     }
     await Promise.all(tasks);
