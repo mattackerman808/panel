@@ -1,6 +1,6 @@
 import { buildTopology, type TopoEdge } from './topology.js';
 import { bps, formatUptime, pct, shortName } from './format.js';
-import type { Band, ClientStat, DeviceType, EnergyDay, MicroinverterInfo, NetworkDevice, PowerwallInfo, SpanCircuit, SpanInfo, UpsInfo, Wan, Features, EventSeverity } from './types.js';
+import type { Band, ClientStat, DeviceType, EnergyDay, MicroinverterInfo, NetworkDevice, PowerwallInfo, PowerwallSample, SpanCircuit, SpanInfo, UpsInfo, Wan, Features, EventSeverity } from './types.js';
 
 /** Pure derivations over the snapshot: what needs attention, fleet rollups,
  *  link utilization. Kept out of the components so the thresholds live in one
@@ -361,7 +361,7 @@ export function circuitRows(
 /** A power source feeding the SPAN panel in the circuit flow. `watts` is
  *  positive into the panel; export and Powerwall charging run negative. */
 export type FlowSource = {
-  key: 'solar' | 'grid' | 'battery';
+  key: 'solar' | 'plugin' | 'grid' | 'battery';
   label: string;
   watts: number;
   dir: string;
@@ -377,7 +377,17 @@ export type FlowSource = {
 export function flowSources(pw: PowerwallInfo | null, span: SpanInfo): FlowSource[] {
   const gridW = pw?.gridW ?? span.gridW ?? 0;
   const list: FlowSource[] = [];
-  if (pw) list.push({ key: 'solar', label: 'Solar', watts: pw.solarW, dir: pw.solarW >= CIRCUIT_ACTIVE_W ? 'producing' : 'idle', color: 'var(--solar)', idle: pw.solarW < CIRCUIT_ACTIVE_W });
+  if (pw) {
+    // With plug-in microinverters the roof (Tesla) and the plug-in system
+    // are separate sources; solarW includes both.
+    const plugIn = pw.plugInSolarW;
+    const roof = plugIn != null ? Math.max(0, pw.solarW - plugIn) : pw.solarW;
+    const label = plugIn != null ? 'Tesla solar' : 'Solar';
+    list.push({ key: 'solar', label, watts: roof, dir: roof >= CIRCUIT_ACTIVE_W ? 'producing' : 'idle', color: 'var(--solar)', idle: roof < CIRCUIT_ACTIVE_W });
+    if (plugIn != null) {
+      list.push({ key: 'plugin', label: 'Plug-in solar', watts: plugIn, dir: plugIn >= CIRCUIT_ACTIVE_W ? 'producing' : 'idle', color: 'var(--solar)', idle: plugIn < CIRCUIT_ACTIVE_W });
+    }
+  }
   list.push({
     key: 'grid',
     label: 'Grid',
@@ -389,6 +399,54 @@ export function flowSources(pw: PowerwallInfo | null, span: SpanInfo): FlowSourc
   });
   if (pw) list.push({ key: 'battery', label: 'Powerwall', watts: pw.batteryW, dir: batteryDirection(pw.batteryW), color: 'var(--battery)', idle: Math.abs(pw.batteryW) < CIRCUIT_ACTIVE_W });
   return list;
+}
+
+// --- solar by system (Tesla roof vs plug-in microinverters) ---
+
+export type SolarSystem = {
+  key: 'roof' | 'plugin';
+  label: string;
+  /** Live output, W. */
+  watts: number;
+  /** Produced today, Wh (null: not known yet). */
+  todayWh: number | null;
+  /** Highest one-minute average since local midnight, W. */
+  peakW: number | null;
+  /** Share of today's total solar, 0–100. */
+  sharePct: number | null;
+  /** One-minute averages since local midnight, for a sparkline. */
+  series: Array<number | null>;
+};
+
+/** Split solar into the Tesla (roof) system and the plug-in microinverters.
+ *  Null when no microinverters are configured (solar is all roof then).
+ *  Minutes recorded before the split was tracked count as roof-only. */
+export function solarSystems(
+  pw: PowerwallInfo | null,
+  history: PowerwallSample[],
+  today: EnergyDay | null,
+  inverters: MicroinverterInfo[],
+  now = Date.now(),
+): SolarSystem[] | null {
+  if (!pw || pw.plugInSolarW == null) return null;
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  const day = history.filter((s) => s.ts >= midnight.getTime());
+  const plugSeries = day.map((s) => s.plugInSolarW ?? null);
+  const roofSeries = day.map((s) => Math.max(0, s.solarW - (s.plugInSolarW ?? 0)));
+  const peak = (xs: Array<number | null>) => {
+    const v = xs.filter((x): x is number => x != null);
+    return v.length ? Math.max(...v) : null;
+  };
+  const fromInverters = inverters.some((m) => m.todayWh != null) ? inverters.reduce((a, m) => a + (m.todayWh ?? 0), 0) : null;
+  const plugWh = today?.plugInSolarWh ?? fromInverters;
+  const roofWh = today ? Math.max(0, today.solarWh - (plugWh ?? 0)) : null;
+  const total = today?.solarWh ?? 0;
+  const share = (wh: number | null) => (wh != null && total > 0 ? Math.min(100, (wh / total) * 100) : null);
+  return [
+    { key: 'roof', label: 'Tesla solar', watts: Math.max(0, pw.solarW - pw.plugInSolarW), todayWh: roofWh, peakW: peak(roofSeries), sharePct: share(roofWh), series: roofSeries },
+    { key: 'plugin', label: 'Plug-in solar', watts: pw.plugInSolarW, todayWh: plugWh, peakW: peak(plugSeries), sharePct: share(plugWh), series: plugSeries },
+  ];
 }
 
 /** Rank keys by value, largest first, with hysteresis: starting from the

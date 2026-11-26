@@ -33,9 +33,11 @@
   const layout = $derived.by(() => {
     const hubH = Math.min(VH * 0.5, 260);
     const hubY = (VH - hubH) / 2;
-    // Sources spread over the middle of the height.
-    const srcTop = VH * 0.17;
-    const srcSpan = VH * 0.66;
+    // Sources spread over the middle of the height (a little further with
+    // four — Tesla solar, plug-in solar, grid, Powerwall — so the labels clear).
+    const four = sources.length > 3;
+    const srcTop = VH * (four ? 0.13 : 0.17);
+    const srcSpan = VH * (four ? 0.73 : 0.66);
     const src = sources.map((s, i) => {
       const y = sources.length === 1 ? VH / 2 : srcTop + (srcSpan * i) / (sources.length - 1);
       // Enter the hub along its left edge, spread to match the order.

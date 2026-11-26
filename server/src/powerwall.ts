@@ -225,8 +225,17 @@ export class EnergyLedger {
   private dirty = false;
   private savedAt = 0;
   private plugInLow: Record<string, number> = {};
-  private minute: { start: number; n: number; solar: number; home: number; grid: number; battery: number; soc: number | null } | null =
-    null;
+  private minute: {
+    start: number;
+    n: number;
+    solar: number;
+    home: number;
+    grid: number;
+    battery: number;
+    soc: number | null;
+    plugIn: number;
+    hasPlugIn: boolean;
+  } | null = null;
 
   constructor() {
     this.state = EnergyLedger.load();
@@ -299,6 +308,7 @@ export class EnergyLedger {
       const day = (this.state.days[date] ??= emptyDay(date));
       day.solarWh += d;
       day.homeWh += d;
+      day.plugInSolarWh = (day.plugInSolarWh ?? 0) + d;
     }
   }
 
@@ -310,7 +320,10 @@ export class EnergyLedger {
 
   /** Fold a live reading into the current minute; returns the finished
    *  average when the minute rolls over. */
-  addReading(r: { solarW: number; homeW: number; gridW: number; batteryW: number; chargePct: number | null }, ts: number): PowerwallSample | null {
+  addReading(
+    r: { solarW: number; homeW: number; gridW: number; batteryW: number; chargePct: number | null; plugInSolarW?: number },
+    ts: number,
+  ): PowerwallSample | null {
     const start = ts - (ts % 60_000);
     let done: PowerwallSample | null = null;
     const m = this.minute;
@@ -322,13 +335,14 @@ export class EnergyLedger {
         gridW: Math.round(m.grid / m.n),
         batteryW: Math.round(m.battery / m.n),
         chargePct: m.soc,
+        ...(m.hasPlugIn ? { plugInSolarW: Math.round(m.plugIn / m.n) } : {}),
       };
       this.state.history.push(done);
       if (this.state.history.length > HISTORY_SAMPLES) this.state.history.splice(0, this.state.history.length - HISTORY_SAMPLES);
       this.dirty = true;
     }
     if (!this.minute || this.minute.start !== start) {
-      this.minute = { start, n: 0, solar: 0, home: 0, grid: 0, battery: 0, soc: null };
+      this.minute = { start, n: 0, solar: 0, home: 0, grid: 0, battery: 0, soc: null, plugIn: 0, hasPlugIn: false };
     }
     const cur = this.minute;
     cur.n += 1;
@@ -337,6 +351,10 @@ export class EnergyLedger {
     cur.grid += r.gridW;
     cur.battery += r.batteryW;
     if (r.chargePct != null) cur.soc = r.chargePct;
+    if (r.plugInSolarW != null) {
+      cur.plugIn += r.plugInSolarW;
+      cur.hasPlugIn = true;
+    }
     return done;
   }
 

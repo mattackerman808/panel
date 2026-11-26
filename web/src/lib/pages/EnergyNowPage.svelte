@@ -1,11 +1,12 @@
 <script lang="ts">
   import { panel } from '$lib/store.svelte';
-  import { backupEstimate, batteryDirection, gridLabel, selfPoweredPct, THRESHOLDS } from '$lib/derive';
+  import { backupEstimate, batteryDirection, gridLabel, selfPoweredPct, solarSystems, THRESHOLDS } from '$lib/derive';
   import { formatKWh, formatUptime, formatW, num, relativeTime } from '$lib/format';
   import Panel from '$lib/components/Panel.svelte';
   import Stat from '$lib/components/Stat.svelte';
   import Meter from '$lib/components/Meter.svelte';
   import PowerFlow from '$lib/components/PowerFlow.svelte';
+  import Sparkline from '$lib/components/Sparkline.svelte';
   import EventList from '$lib/components/EventList.svelte';
 
   /** The energy kiosk's home page: the live power flow, the Powerwall, the
@@ -22,12 +23,21 @@
   );
   const gridTone = $derived(!live ? 'warn' : pw!.grid === 'connected' ? 'ok' : pw!.grid === 'islanded' ? 'crit' : 'warn');
   const energyEvents = $derived(panel.events.filter((e) => /^(grid|powerwall|ups|solar)\./.test(e.kind)));
-  // Plug-in (balcony) solar is already inside pw.solarW and today.solarWh;
-  // these only say how much of it came from there.
+  // Tesla (roof) vs plug-in microinverters, side by side. solarW and
+  // today.solarWh are the two together; null when there's no plug-in.
   const plugIn = $derived(panel.features.microinvertersAvailable ? panel.microinverters : []);
-  const plugInW = $derived(pw?.plugInSolarW ?? 0);
-  const plugInTodayWh = $derived(plugIn.reduce((a, m) => a + (m.todayWh ?? 0), 0));
-  const plugInLive = $derived(formatW(plugInW));
+  const plugInAwake = $derived(plugIn.some((m) => m.reachable));
+  const systems = $derived(solarSystems(pw, panel.powerwallHistory, today, plugIn));
+  const plugInNote = $derived.by(() => {
+    if (!plugInAwake) return 'asleep · panel not powered';
+    const ch = plugIn.filter((m) => m.reachable).flatMap((m) => m.channels);
+    const on = ch.filter((c) => c.powerW > 0).length;
+    const model = plugIn.find((m) => m.reachable)?.model ?? 'EZ1';
+    return `${model} · ${on} of ${ch.length} panel inputs producing`;
+  });
+  const peakOf = (w: number | null) => formatW(w ?? undefined);
+  // The plug-in makes well under a kWh a day: show two decimals below 10.
+  const kwhFine = (wh: number | null) => (wh == null ? '—' : (Math.max(0, wh) / 1000).toFixed(wh < 10_000 ? 2 : 1));
 
   const k = (wh: number | undefined) => formatKWh(wh);
   const backup = $derived(backupEstimate(panel.span, pw));
@@ -61,12 +71,9 @@
     <Panel title="Power flow" tone={gridTone} class="flow-panel">
       {#snippet meta()}
         <span>{gridLabel(pw.grid)}</span>
-        {#if plugIn.length}
-          <span>{plugIn.some((m) => m.reachable) ? `incl. plug-in solar ${plugInLive.value} ${plugInLive.unit}` : 'plug-in solar asleep'}</span>
-        {/if}
         <span>{live ? `updated ${relativeTime(pw.updatedAt)}` : 'gateway not answering'}</span>
       {/snippet}
-      <PowerFlow {pw} {active} />
+      <PowerFlow {pw} {active} {plugInAwake} />
     </Panel>
 
     <Panel title="Powerwall">
@@ -83,11 +90,37 @@
       </div>
     </Panel>
 
+    {#if systems}
+      <Panel title="Solar by system">
+        {#snippet meta()}<span>since midnight · each on its own scale</span>{/snippet}
+        <div class="systems">
+          {#each systems as sys (sys.key)}
+            {@const now = formatW(sys.watts)}
+            {@const pk = peakOf(sys.peakW)}
+            <div class="sys">
+              <div class="sys-head">
+                <span class="swatch s-solar"></span>
+                <span class="sys-name">{sys.label}</span>
+                <span class="sys-note">{sys.key === 'roof' ? 'Powerwall gateway' : plugInNote}</span>
+              </div>
+              <div class="sys-stats">
+                <Stat label="Now" value={now.value} unit={now.unit} size="lg" />
+                <Stat label="Today" value={kwhFine(sys.todayWh)} unit="kWh" />
+                <Stat label="Peak" value={pk.value} unit={pk.unit} />
+                <Stat label="Share" value={sys.sharePct == null ? '—' : num(sys.sharePct)} unit="%" />
+              </div>
+              <Sparkline values={sys.series} color="var(--solar)" height={30} min={0} />
+            </div>
+          {/each}
+        </div>
+      </Panel>
+    {/if}
+
     <Panel title="Today">
       {#snippet meta()}<span>since midnight</span>{/snippet}
       {#if today}
         <div class="totals">
-          <div class="t"><span class="swatch s-solar"></span><Stat label="Solar produced" value={k(today.solarWh).value} unit="kWh" size="lg" sub={plugIn.length ? `incl. ${k(plugInTodayWh).value} kWh plug-in` : undefined} /></div>
+          <div class="t"><span class="swatch s-solar"></span><Stat label="Solar produced" value={k(today.solarWh).value} unit="kWh" size="lg" /></div>
           <div class="t"><span class="swatch s-home"></span><Stat label="Home used" value={k(today.homeWh).value} unit="kWh" size="lg" /></div>
           <div class="t"><span class="swatch s-grid"></span><Stat label="From grid" value={k(today.gridImportWh).value} unit="kWh" /></div>
           <div class="t"><span class="swatch s-grid"></span><Stat label="To grid" value={k(today.gridExportWh).value} unit="kWh" /></div>
@@ -116,13 +149,51 @@
   .now {
     display: grid;
     grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     gap: 1rem;
     height: 100%;
     min-height: 0;
   }
   .now > :global(.flow-panel) {
-    grid-row: 1 / 4;
+    grid-row: 1 / -1;
+  }
+  .systems {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.4rem;
+    padding: 0.2rem 0 0.3rem;
+  }
+  .sys {
+    display: grid;
+    gap: 0.55rem;
+    min-width: 0;
+  }
+  .sys-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+  .sys-head .swatch {
+    align-self: center;
+  }
+  .sys-name {
+    color: var(--ink);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .sys-note {
+    color: var(--ink-3);
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sys-stats {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) repeat(3, minmax(0, 1fr));
+    gap: 0.8rem;
+    align-items: end;
   }
   .battery {
     display: grid;
@@ -161,6 +232,13 @@
     }
     .battery {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .systems {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 1.1rem;
+    }
+    .sys-note {
+      white-space: normal;
     }
   }
 </style>
